@@ -1,0 +1,754 @@
+class_name PlayerController
+extends CharacterBody3D
+
+const GRAVITY := 26.0
+const WALK_SPEED := 7.6
+const BACKPEDAL_SPEED := 4.8
+const TURN_SPEED := 2.6
+const JUMP_VELOCITY := 9.2
+const SWING_INTERVAL := 1.9
+const MELEE_RANGE := 3.9
+
+var rig_node: Node3D = null
+var camera_pivot: Node3D = null
+var spring_arm: SpringArm3D = null
+var camera: Camera3D = null
+var target_ring: MeshInstance3D = null
+
+var cam_yaw: float = 0.0
+var cam_pitch: float = -0.34
+var cam_dist: float = 8.2
+
+var lmb_down: bool = false
+var rmb_down: bool = false
+var lmb_press_pos: Vector2 = Vector2.ZERO
+var rmb_press_pos: Vector2 = Vector2.ZERO
+var lmb_drag_dist: float = 0.0
+var rmb_drag_dist: float = 0.0
+var is_mouse_captured_for_drag: bool = false
+
+var anim_time: float = 0.0
+var attack_anim_timer: float = 0.0
+var whirlwind_anim_timer: float = 0.0
+var swing_timer: float = 0.0
+var auto_attack_enabled: bool = false
+
+var is_charging: bool = false
+var charge_target: MobEntity = null
+var charge_timeout: float = 0.0
+
+var spawn_position: Vector3 = Vector3.ZERO
+var death_respawn_timer: float = 0.0
+var tab_cycle_index: int = 0
+
+
+func _ready() -> void:
+	add_to_group("player")
+	collision_layer = 1
+	collision_mask = 1
+	GameState.player_node = self
+	spawn_position = global_position
+	cam_yaw = rotation.y
+
+	_build_collision()
+	_build_visuals()
+	_build_camera()
+	_build_target_ring()
+
+	GameState.player_leveled_up.connect(_on_level_up)
+	GameState.player_died.connect(_on_player_died)
+	GameState.player_respawned.connect(_on_player_respawned)
+	GameState.target_changed.connect(_on_target_changed)
+
+
+func _build_collision() -> void:
+	var col := CollisionShape3D.new()
+	var cap := CapsuleShape3D.new()
+	cap.radius = 0.52
+	cap.height = 1.85
+	col.shape = cap
+	col.position = Vector3(0, 0.92, 0)
+	add_child(col)
+
+
+func _build_visuals() -> void:
+	rig_node = RetroModelBuilder.build_humanoid({
+		"scale": 1.05,
+		"archetype": "warrior",
+		"armor_color": Color(0.28, 0.34, 0.44),
+		"accent_color": Color(0.78, 0.60, 0.22),
+		"skin_color": Color(0.88, 0.70, 0.56),
+		"pants_color": Color(0.20, 0.18, 0.17),
+		"cape_color": Color(0.62, 0.12, 0.12),
+		"hair_color": Color(0.28, 0.17, 0.10),
+		"eye_color": Color(0.16, 0.36, 0.65),
+		"weapon_type": "greatsword",
+		"has_cape": true,
+		"has_shield": false,
+	})
+	add_child(rig_node)
+
+
+func _build_camera() -> void:
+	camera_pivot = Node3D.new()
+	camera_pivot.name = "CameraPivot"
+	camera_pivot.top_level = true
+	add_child(camera_pivot)
+	camera_pivot.global_position = global_position + Vector3(0, 1.55, 0)
+
+	spring_arm = SpringArm3D.new()
+	spring_arm.name = "SpringArm3D"
+	spring_arm.spring_length = cam_dist
+	spring_arm.collision_mask = 1
+	spring_arm.margin = 0.35
+	camera_pivot.add_child(spring_arm)
+
+	camera = Camera3D.new()
+	camera.name = "Camera3D"
+	camera.fov = 62.0
+	camera.far = 260.0
+	camera.current = true
+	spring_arm.add_child(camera)
+
+
+func _build_target_ring() -> void:
+	target_ring = MeshInstance3D.new()
+	target_ring.name = "TargetRing"
+	target_ring.top_level = true
+	var torus := TorusMesh.new()
+	torus.inner_radius = 0.85
+	torus.outer_radius = 1.02
+	torus.rings = 24
+	torus.ring_segments = 6
+	target_ring.mesh = torus
+	target_ring.scale = Vector3(1.0, 0.15, 1.0)
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.95, 0.22, 0.18, 0.85)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.emission_enabled = true
+	mat.emission = Color(0.95, 0.22, 0.18)
+	mat.emission_energy_multiplier = 1.8
+	target_ring.material_override = mat
+	target_ring.visible = false
+	add_child(target_ring)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		lmb_down = false
+		rmb_down = false
+		_release_drag_capture()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
+			cam_dist = clampf(cam_dist - 1.0, 2.8, 18.0)
+			spring_arm.spring_length = cam_dist
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
+			cam_dist = clampf(cam_dist + 1.0, 2.8, 18.0)
+			spring_arm.spring_length = cam_dist
+		elif mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed:
+				lmb_down = true
+				lmb_press_pos = mb.position
+				lmb_drag_dist = 0.0
+			else:
+				var was_click: bool = lmb_down and lmb_drag_dist <= 6.0
+				lmb_down = false
+				if not rmb_down:
+					_release_drag_capture()
+				if was_click:
+					_try_click_world(mb.position, false)
+		elif mb.button_index == MOUSE_BUTTON_RIGHT:
+			if mb.pressed:
+				rmb_down = true
+				rmb_press_pos = mb.position
+				rmb_drag_dist = 0.0
+			else:
+				var was_click: bool = rmb_down and rmb_drag_dist <= 6.0
+				rmb_down = false
+				if not lmb_down:
+					_release_drag_capture()
+				if was_click:
+					_try_click_world(mb.position, true)
+
+	elif event is InputEventMouseMotion:
+		var mm := event as InputEventMouseMotion
+		if lmb_down or rmb_down:
+			var delta_len: float = mm.relative.length()
+			if lmb_down:
+				lmb_drag_dist += delta_len
+			if rmb_down:
+				rmb_drag_dist += delta_len
+
+			if not is_mouse_captured_for_drag and (lmb_drag_dist > 5.0 or rmb_drag_dist > 5.0):
+				is_mouse_captured_for_drag = true
+				Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+			if is_mouse_captured_for_drag:
+				cam_yaw -= mm.relative.x * 0.0048
+				cam_pitch = clampf(cam_pitch - mm.relative.y * 0.0042, -1.25, 0.25)
+				if rmb_down and not GameState.is_dead:
+					rotation.y = cam_yaw
+
+	elif event is InputEventKey:
+		var key := event as InputEventKey
+		if key.pressed and not key.echo:
+			match key.physical_keycode:
+				KEY_TAB:
+					_cycle_tab_target()
+					get_viewport().set_input_as_handled()
+				KEY_1:
+					trigger_ability(1)
+				KEY_2:
+					trigger_ability(2)
+				KEY_3:
+					trigger_ability(3)
+				KEY_4:
+					trigger_ability(4)
+				KEY_5:
+					trigger_ability(5)
+				KEY_F:
+					_interact_nearest_or_target()
+				KEY_ESCAPE:
+					if GameState.current_target != null:
+						GameState.set_target(null)
+						auto_attack_enabled = false
+
+
+func _release_drag_capture() -> void:
+	if is_mouse_captured_for_drag:
+		is_mouse_captured_for_drag = false
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _physics_process(delta: float) -> void:
+	anim_time += delta
+	if attack_anim_timer > 0.0:
+		attack_anim_timer = maxf(0.0, attack_anim_timer - delta)
+	if whirlwind_anim_timer > 0.0:
+		whirlwind_anim_timer = maxf(0.0, whirlwind_anim_timer - delta)
+	if swing_timer > 0.0:
+		swing_timer = maxf(0.0, swing_timer - delta)
+
+	if GameState.is_dead:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		if not is_on_floor():
+			velocity.y -= GRAVITY * delta
+		move_and_slide()
+		death_respawn_timer -= delta
+		if death_respawn_timer <= 0.0:
+			GameState.respawn_player()
+		_update_camera_and_ring(delta)
+		_update_animation()
+		return
+
+	if is_charging:
+		_process_charge(delta)
+	else:
+		_process_movement(delta)
+
+	_process_auto_attack()
+	_update_camera_and_ring(delta)
+	_update_animation()
+
+
+func _process_movement(delta: float) -> void:
+	if not is_on_floor():
+		velocity.y -= GRAVITY * delta
+	elif Input.is_physical_key_pressed(KEY_SPACE):
+		velocity.y = JUMP_VELOCITY
+	else:
+		velocity.y = 0.0
+
+	var forward_input: float = 0.0
+	if Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP):
+		forward_input += 1.0
+	if Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN):
+		forward_input -= 1.0
+	if lmb_down and rmb_down:
+		forward_input = 1.0
+
+	var strafe_input: float = 0.0
+	if Input.is_physical_key_pressed(KEY_Q):
+		strafe_input -= 1.0
+	if Input.is_physical_key_pressed(KEY_E):
+		strafe_input += 1.0
+
+	var turn_input: float = 0.0
+	if Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT):
+		if rmb_down:
+			strafe_input -= 1.0
+		else:
+			turn_input += 1.0
+	if Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT):
+		if rmb_down:
+			strafe_input += 1.0
+		else:
+			turn_input -= 1.0
+
+	if rmb_down:
+		rotation.y = cam_yaw
+	elif absf(turn_input) > 0.01:
+		rotation.y += turn_input * TURN_SPEED * delta
+		cam_yaw += turn_input * TURN_SPEED * delta
+
+	var forward_dir: Vector3 = -global_transform.basis.z
+	forward_dir.y = 0.0
+	forward_dir = forward_dir.normalized()
+
+	var right_dir: Vector3 = global_transform.basis.x
+	right_dir.y = 0.0
+	right_dir = right_dir.normalized()
+
+	var move_vec: Vector3 = forward_dir * forward_input + right_dir * strafe_input
+	if move_vec.length_squared() > 0.001:
+		move_vec = move_vec.normalized()
+		var speed: float = BACKPEDAL_SPEED if (forward_input < 0.0 and absf(strafe_input) < 0.1) else WALK_SPEED
+		velocity.x = move_vec.x * speed
+		velocity.z = move_vec.z * speed
+	else:
+		velocity.x = move_toward(velocity.x, 0.0, 42.0 * delta)
+		velocity.z = move_toward(velocity.z, 0.0, 42.0 * delta)
+
+	move_and_slide()
+
+
+func _process_charge(delta: float) -> void:
+	charge_timeout -= delta
+	if charge_timeout <= 0.0 or not is_instance_valid(charge_target) or charge_target.is_dead():
+		is_charging = false
+		charge_target = null
+		return
+
+	var to_target: Vector3 = charge_target.global_position - global_position
+	to_target.y = 0.0
+	var dist: float = to_target.length()
+	if dist <= 2.6:
+		is_charging = false
+		velocity.x = 0.0
+		velocity.z = 0.0
+		charge_target.apply_stun(2.0)
+		_spawn_ring_fx(charge_target.global_position + Vector3(0, 0.15, 0), Color(1.0, 0.65, 0.2), 0.4, 2.3, 0.35)
+		swing_timer = minf(swing_timer, 0.2)
+		charge_target = null
+		return
+
+	var dir: Vector3 = to_target.normalized()
+	rotation.y = atan2(-dir.x, -dir.z)
+	cam_yaw = lerp_angle(cam_yaw, rotation.y, minf(1.0, delta * 8.0))
+	velocity.x = dir.x * 23.0
+	velocity.z = dir.z * 23.0
+	if not is_on_floor():
+		velocity.y -= GRAVITY * delta
+	move_and_slide()
+
+
+func _process_auto_attack() -> void:
+	if not auto_attack_enabled:
+		return
+	var target: Node3D = GameState.current_target
+	if not is_instance_valid(target) or not (target is MobEntity):
+		auto_attack_enabled = false
+		return
+	var mob := target as MobEntity
+	if mob.is_dead():
+		auto_attack_enabled = false
+		return
+
+	var dist: float = global_position.distance_to(mob.global_position)
+	if dist <= MELEE_RANGE and swing_timer <= 0.0:
+		swing_timer = SWING_INTERVAL
+		attack_anim_timer = 0.52
+		_face_target(mob.global_position)
+		var dmg_info: Dictionary = GameState.get_attack_damage(1.0, 0)
+		mob.take_damage(int(dmg_info["damage"]), self, "Автоатака", bool(dmg_info["is_crit"]))
+		GameState.add_rage(15)
+		GameState.touch_combat()
+
+
+func trigger_ability(slot: int) -> void:
+	if GameState.is_dead:
+		GameState.add_combat_log("Вы мертвы и не можете применять способности.", GameState.COLOR_LOG_ERROR)
+		return
+
+	match slot:
+		1:
+			# Автоатака
+			if auto_attack_enabled:
+				auto_attack_enabled = false
+				GameState.add_combat_log("Автоатака остановлена.", GameState.COLOR_LOG_SYSTEM)
+			else:
+				var mob: MobEntity = _get_target_mob()
+				if mob == null:
+					mob = _find_nearest_living_mob(10.0)
+					if mob != null:
+						GameState.set_target(mob)
+				if mob == null or mob.is_dead():
+					GameState.add_combat_log("Нет подходящей цели для атаки.", GameState.COLOR_LOG_ERROR)
+					return
+				auto_attack_enabled = true
+				GameState.add_combat_log("Начата автоатака по цели: %s." % mob.mob_title, GameState.COLOR_LOG_SYSTEM)
+
+		2:
+			# Рывок (Charge)
+			if GameState.ability_cooldowns["charge"] > 0.0:
+				GameState.add_combat_log("Способность «Рывок» ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			var mob: MobEntity = _get_target_mob()
+			if mob == null or mob.is_dead():
+				GameState.add_combat_log("Выберите живого врага для Рывка.", GameState.COLOR_LOG_ERROR)
+				return
+			var dist: float = global_position.distance_to(mob.global_position)
+			if dist < 3.5:
+				GameState.add_combat_log("Вы слишком близко к цели для Рывка.", GameState.COLOR_LOG_ERROR)
+				return
+			if dist > 22.0:
+				GameState.add_combat_log("Цель слишком далеко для Рывка (макс. 22 м).", GameState.COLOR_LOG_ERROR)
+				return
+
+			GameState.ability_cooldowns["charge"] = GameState.ability_max_cooldowns["charge"]
+			GameState.add_rage(20)
+			GameState.touch_combat()
+			is_charging = true
+			charge_target = mob
+			charge_timeout = 1.4
+			auto_attack_enabled = true
+			_spawn_ring_fx(global_position + Vector3(0, 0.15, 0), Color(0.95, 0.55, 0.2), 0.3, 1.8, 0.35)
+			GameState.add_combat_log("Вы совершаете «Рывок» к цели %s (+20 Ярости)!" % mob.mob_title, GameState.COLOR_LOG_SPELL)
+
+		3:
+			# Героический удар (Heroic Strike)
+			if GameState.ability_cooldowns["heroic_strike"] > 0.0:
+				GameState.add_combat_log("Способность «Героический удар» ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			var mob: MobEntity = _get_target_mob()
+			if mob == null or mob.is_dead():
+				GameState.add_combat_log("Выберите живого врага!", GameState.COLOR_LOG_ERROR)
+				return
+			if global_position.distance_to(mob.global_position) > MELEE_RANGE + 0.4:
+				GameState.add_combat_log("Подойдите ближе к цели!", GameState.COLOR_LOG_ERROR)
+				return
+			if not GameState.spend_rage(15):
+				GameState.add_combat_log("Недостаточно ярости (нужно 15).", GameState.COLOR_LOG_ERROR)
+				return
+
+			GameState.ability_cooldowns["heroic_strike"] = GameState.ability_max_cooldowns["heroic_strike"]
+			attack_anim_timer = 0.55
+			auto_attack_enabled = true
+			_face_target(mob.global_position)
+			var dmg_info: Dictionary = GameState.get_attack_damage(1.45, 7)
+			mob.take_damage(int(dmg_info["damage"]), self, "Героический удар", bool(dmg_info["is_crit"]))
+			_spawn_ring_fx(mob.global_position + Vector3(0, 0.25, 0), Color(1.0, 0.85, 0.25), 0.2, 1.5, 0.28)
+			GameState.touch_combat()
+
+		4:
+			# Вихрь (Whirlwind)
+			if GameState.ability_cooldowns["whirlwind"] > 0.0:
+				GameState.add_combat_log("Способность «Вихрь» ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			if not GameState.spend_rage(25):
+				GameState.add_combat_log("Недостаточно ярости (нужно 25).", GameState.COLOR_LOG_ERROR)
+				return
+
+			GameState.ability_cooldowns["whirlwind"] = GameState.ability_max_cooldowns["whirlwind"]
+			whirlwind_anim_timer = 0.65
+			GameState.touch_combat()
+			_spawn_ring_fx(global_position + Vector3(0, 0.9, 0), Color(0.82, 0.92, 1.0), 1.0, 5.2, 0.45)
+
+			var hit_count: int = 0
+			for node in get_tree().get_nodes_in_group("mobs"):
+				var mob := node as MobEntity
+				if mob != null and not mob.is_dead() and global_position.distance_to(mob.global_position) <= 5.2:
+					var dmg_info: Dictionary = GameState.get_attack_damage(1.25, 4)
+					mob.take_damage(int(dmg_info["damage"]), self, "Вихрь", bool(dmg_info["is_crit"]))
+					hit_count += 1
+			if hit_count == 0:
+				GameState.add_combat_log("Ваш «Вихрь» никого не задел.", GameState.COLOR_LOG_SYSTEM)
+
+		5:
+			# Боевой крик + Второе дыхание
+			if GameState.ability_cooldowns["battle_shout"] > 0.0:
+				GameState.add_combat_log("Способность «Боевой крик» ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			GameState.ability_cooldowns["battle_shout"] = GameState.ability_max_cooldowns["battle_shout"]
+			GameState.battle_shout_timer = 30.0
+			var heal_amt: int = maxi(15, int(round(GameState.max_hp * 0.35)))
+			GameState.heal_player(heal_amt, "Боевой крик")
+			GameState.add_combat_log("Вы издаёте «Боевой крик»! Урон увеличен на 25% на 30 сек.", GameState.COLOR_LOG_SPELL)
+			GameState.floating_text_requested.emit(global_position + Vector3(0, 2.5, 0), "БОЕВОЙ КРИК!", Color(1.0, 0.85, 0.2), true)
+			_spawn_ring_fx(global_position + Vector3(0, 0.2, 0), Color(1.0, 0.84, 0.18), 0.5, 4.5, 0.5)
+
+
+func get_swing_progress() -> float:
+	if not auto_attack_enabled:
+		return 0.0
+	return clampf(1.0 - (swing_timer / SWING_INTERVAL), 0.0, 1.0)
+
+
+func _get_target_mob() -> MobEntity:
+	if is_instance_valid(GameState.current_target) and GameState.current_target is MobEntity:
+		return GameState.current_target as MobEntity
+	return null
+
+
+func _find_nearest_living_mob(max_dist: float) -> MobEntity:
+	var best: MobEntity = null
+	var best_d: float = max_dist
+	for node in get_tree().get_nodes_in_group("mobs"):
+		var mob := node as MobEntity
+		if mob != null and not mob.is_dead():
+			var d: float = global_position.distance_to(mob.global_position)
+			if d < best_d:
+				best_d = d
+				best = mob
+	return best
+
+
+func _cycle_tab_target() -> void:
+	var candidates: Array[Dictionary] = []
+	var cam_fwd: Vector3 = -camera.global_transform.basis.z
+	cam_fwd.y = 0.0
+	cam_fwd = cam_fwd.normalized()
+
+	for node in get_tree().get_nodes_in_group("mobs"):
+		var mob := node as MobEntity
+		if mob != null and not mob.is_dead():
+			var to_m: Vector3 = mob.global_position - global_position
+			to_m.y = 0.0
+			var dist: float = to_m.length()
+			if dist <= 32.0:
+				var dot: float = cam_fwd.dot(to_m.normalized()) if dist > 0.1 else 1.0
+				var score: float = dist - (dot * 8.0)
+				candidates.append({"mob": mob, "score": score})
+
+	if candidates.is_empty():
+		GameState.add_combat_log("Поблизости нет живых противников.", GameState.COLOR_LOG_SYSTEM)
+		return
+
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return float(a["score"]) < float(b["score"])
+	)
+
+	var current_idx: int = -1
+	for i in range(candidates.size()):
+		if candidates[i]["mob"] == GameState.current_target:
+			current_idx = i
+			break
+
+	var next_idx: int = (current_idx + 1) % candidates.size()
+	GameState.set_target(candidates[next_idx]["mob"] as Node3D)
+
+
+func _try_click_world(screen_pos: Vector2, is_right_click: bool) -> void:
+	if camera == null:
+		return
+	var from: Vector3 = camera.project_ray_origin(screen_pos)
+	var dir: Vector3 = camera.project_ray_normal(screen_pos)
+	var space_state: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
+	var query := PhysicsRayQueryParameters3D.create(from, from + dir * 75.0)
+	query.collision_mask = 2
+	query.collide_with_bodies = true
+	var result: Dictionary = space_state.intersect_ray(query)
+
+	if result.is_empty():
+		if not is_right_click:
+			GameState.set_target(null)
+			auto_attack_enabled = false
+		return
+
+	var collider: Object = result.get("collider")
+	if collider is QuestNPC:
+		var npc := collider as QuestNPC
+		GameState.set_target(npc)
+		auto_attack_enabled = false
+		if is_right_click:
+			if global_position.distance_to(npc.global_position) <= 6.8:
+				npc.interact()
+			else:
+				GameState.add_combat_log("Подойдите ближе к %s, чтобы поговорить." % npc.npc_name, GameState.COLOR_LOG_SYSTEM)
+	elif collider is MobEntity:
+		var mob := collider as MobEntity
+		GameState.set_target(mob)
+		if is_right_click:
+			if mob.is_dead():
+				auto_attack_enabled = false
+				if mob.has_loot():
+					if global_position.distance_to(mob.global_position) <= 6.8:
+						GameState.loot_window_requested.emit(mob)
+					else:
+						GameState.add_combat_log("Подойдите ближе к телу, чтобы осмотреть добычу.", GameState.COLOR_LOG_SYSTEM)
+				else:
+					GameState.add_combat_log("В этом теле больше нет добычи.", GameState.COLOR_LOG_SYSTEM)
+			else:
+				if not GameState.is_dead:
+					auto_attack_enabled = true
+
+
+func _interact_nearest_or_target() -> void:
+	var t: Node3D = GameState.current_target
+	if is_instance_valid(t):
+		if t is QuestNPC and global_position.distance_to(t.global_position) <= 7.0:
+			(t as QuestNPC).interact()
+			return
+		if t is MobEntity and (t as MobEntity).is_dead() and (t as MobEntity).has_loot() and global_position.distance_to(t.global_position) <= 7.0:
+			GameState.loot_window_requested.emit(t)
+			return
+
+	for node in get_tree().get_nodes_in_group("npcs"):
+		var npc := node as QuestNPC
+		if npc != null and global_position.distance_to(npc.global_position) <= 6.8:
+			GameState.set_target(npc)
+			npc.interact()
+			return
+
+	for node in get_tree().get_nodes_in_group("mobs"):
+		var mob := node as MobEntity
+		if mob != null and mob.is_dead() and mob.has_loot() and global_position.distance_to(mob.global_position) <= 6.8:
+			GameState.set_target(mob)
+			GameState.loot_window_requested.emit(mob)
+			return
+
+
+func _face_target(target_pos: Vector3) -> void:
+	var to_t: Vector3 = target_pos - global_position
+	to_t.y = 0.0
+	if to_t.length_squared() > 0.001 and not rmb_down:
+		rotation.y = atan2(-to_t.x, -to_t.z)
+
+
+func _update_camera_and_ring(_delta: float) -> void:
+	if camera_pivot:
+		camera_pivot.global_position = global_position + Vector3(0, 1.55, 0)
+		camera_pivot.rotation = Vector3(cam_pitch, cam_yaw, 0.0)
+
+	if target_ring:
+		var t: Node3D = GameState.current_target
+		if is_instance_valid(t):
+			target_ring.visible = true
+			target_ring.global_position = Vector3(t.global_position.x, t.global_position.y + 0.08, t.global_position.z)
+			var mat := target_ring.material_override as StandardMaterial3D
+			var ring_scale: float = 1.0
+			if t is QuestNPC:
+				if mat:
+					mat.albedo_color = Color(0.25, 0.92, 0.35, 0.85)
+					mat.emission = Color(0.25, 0.92, 0.35)
+				ring_scale = 1.0
+			elif t is MobEntity:
+				var mob := t as MobEntity
+				ring_scale = 1.45 if mob.mob_id == "boss_crusher" else (1.15 if mob.mob_id == "wolf" else 0.95)
+				if mat:
+					if mob.is_dead():
+						mat.albedo_color = Color(1.0, 0.84, 0.22, 0.85)
+						mat.emission = Color(1.0, 0.84, 0.22)
+					else:
+						mat.albedo_color = Color(0.95, 0.22, 0.18, 0.85)
+						mat.emission = Color(0.95, 0.22, 0.18)
+			target_ring.scale = Vector3(ring_scale, 0.15, ring_scale)
+		else:
+			target_ring.visible = false
+
+
+func _update_animation() -> void:
+	if rig_node == null:
+		return
+	var anim_state: String = "IDLE"
+	var atk_prog: float = 0.0
+	var spin: float = 0.0
+
+	if GameState.is_dead:
+		anim_state = "DEAD"
+	elif whirlwind_anim_timer > 0.0:
+		anim_state = "WHIRLWIND"
+		var p: float = 1.0 - (whirlwind_anim_timer / 0.65)
+		spin = p * TAU * 2.0
+	elif is_charging:
+		anim_state = "CHARGE"
+	elif Vector2(velocity.x, velocity.z).length() > 0.35:
+		anim_state = "WALK"
+
+	if attack_anim_timer > 0.0:
+		atk_prog = 1.0 - (attack_anim_timer / 0.55)
+
+	RetroModelBuilder.animate_humanoid(rig_node, anim_state, anim_time, atk_prog, spin, 0.0)
+
+
+func _on_target_changed(new_target: Node3D) -> void:
+	if new_target == null:
+		auto_attack_enabled = false
+
+
+func _on_player_died() -> void:
+	auto_attack_enabled = false
+	is_charging = false
+	charge_target = null
+	death_respawn_timer = 4.0
+
+
+func _on_player_respawned() -> void:
+	global_position = spawn_position
+	velocity = Vector3.ZERO
+	_spawn_level_up_pillar()
+
+
+func _on_level_up() -> void:
+	_spawn_level_up_pillar()
+
+
+func _spawn_ring_fx(pos: Vector3, color: Color, start_rad: float, end_rad: float, duration: float) -> void:
+	var fx := MeshInstance3D.new()
+	var torus := TorusMesh.new()
+	torus.inner_radius = 0.78
+	torus.outer_radius = 1.0
+	torus.rings = 24
+	torus.ring_segments = 6
+	fx.mesh = torus
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(color.r, color.g, color.b, 0.9)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.emission_energy_multiplier = 2.6
+	fx.material_override = mat
+
+	get_parent().add_child(fx)
+	fx.global_position = pos
+	fx.scale = Vector3(start_rad, 0.12, start_rad)
+
+	var tw := fx.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(fx, "scale", Vector3(end_rad, 0.08, end_rad), duration).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(mat, "albedo_color:a", 0.0, duration)
+	tw.chain().tween_callback(fx.queue_free)
+
+
+func _spawn_level_up_pillar() -> void:
+	var fx := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 1.25
+	cyl.bottom_radius = 0.85
+	cyl.height = 7.0
+	cyl.radial_segments = 16
+	fx.mesh = cyl
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.90, 0.30, 0.58)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.86, 0.25)
+	mat.emission_energy_multiplier = 2.5
+	fx.material_override = mat
+
+	get_parent().add_child(fx)
+	fx.global_position = global_position + Vector3(0, 3.5, 0)
+
+	var tw := fx.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(fx, "scale", Vector3(1.6, 1.25, 1.6), 1.1)
+	tw.tween_property(mat, "albedo_color:a", 0.0, 1.1)
+	tw.chain().tween_callback(fx.queue_free)
