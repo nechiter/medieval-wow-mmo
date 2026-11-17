@@ -1,4 +1,4 @@
-class_name MobEntity
+﻿class_name MobEntity
 extends CharacterBody3D
 
 enum State {
@@ -144,8 +144,10 @@ func _build_indicators() -> void:
 	nameplate = Label3D.new()
 	nameplate.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	nameplate.no_depth_test = false
-	nameplate.pixel_size = 0.009
-	nameplate.font_size = 34
+	nameplate.fixed_size = true
+	nameplate.pixel_size = 0.0006
+	nameplate.font_size = 30
+	nameplate.visibility_range_end = 32.0
 	nameplate.outline_size = 8
 	nameplate.outline_modulate = Color(0.05, 0.05, 0.05, 0.95)
 	nameplate.position = Vector3(0, 2.75 if mob_id == "boss_crusher" else (1.55 if mob_id == "wolf" else 2.0), 0)
@@ -153,8 +155,10 @@ func _build_indicators() -> void:
 
 	stun_indicator = Label3D.new()
 	stun_indicator.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	stun_indicator.pixel_size = 0.008
-	stun_indicator.font_size = 30
+	stun_indicator.fixed_size = true
+	stun_indicator.pixel_size = 0.0006
+	stun_indicator.font_size = 26
+	stun_indicator.visibility_range_end = 32.0
 	stun_indicator.modulate = Color(1.0, 0.92, 0.25)
 	stun_indicator.outline_size = 7
 	stun_indicator.text = "* ОГЛУШЁН *"

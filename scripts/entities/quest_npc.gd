@@ -1,4 +1,4 @@
-class_name QuestNPC
+﻿class_name QuestNPC
 extends StaticBody3D
 
 @export var npc_name: String = "Капитан Маркус"
@@ -42,8 +42,10 @@ func _ready() -> void:
 
 	nameplate = Label3D.new()
 	nameplate.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	nameplate.pixel_size = 0.0085
-	nameplate.font_size = 34
+	nameplate.fixed_size = true
+	nameplate.pixel_size = 0.0006
+	nameplate.font_size = 30
+	nameplate.visibility_range_end = 40.0
 	nameplate.outline_size = 8
 	nameplate.outline_modulate = Color(0.03, 0.08, 0.03, 0.95)
 	nameplate.modulate = Color(0.36, 0.96, 0.42)
@@ -53,8 +55,10 @@ func _ready() -> void:
 
 	quest_marker = Label3D.new()
 	quest_marker.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	quest_marker.pixel_size = 0.015
+	quest_marker.fixed_size = true
+	quest_marker.pixel_size = 0.0011
 	quest_marker.font_size = 64
+	quest_marker.visibility_range_end = 60.0
 	quest_marker.outline_size = 12
 	quest_marker.outline_modulate = Color(0.10, 0.06, 0.02, 0.98)
 	quest_marker.position = Vector3(0, 3.15, 0)

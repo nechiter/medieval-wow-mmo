@@ -1,4 +1,4 @@
-extends Node3D
+﻿extends Node3D
 
 var campfire_light: OmniLight3D = null
 var _time_accum: float = 0.0
@@ -80,15 +80,37 @@ func _make_static_box(parent: Node3D, size: Vector3, pos: Vector3, mat: Material
 	return mi
 
 
+func _noise_material(base: Color, uv_scale: float, contrast: float = 0.35) -> StandardMaterial3D:
+	var mat := RetroModelBuilder.make_retro_material(base, 0.96, 0.0)
+	var noise := FastNoiseLite.new()
+	noise.noise_type = FastNoiseLite.TYPE_CELLULAR
+	noise.frequency = 0.045
+	noise.seed = int(base.r * 1000.0) + 7
+	var tex := NoiseTexture2D.new()
+	tex.noise = noise
+	tex.width = 128
+	tex.height = 128
+	tex.seamless = true
+	var grad := Gradient.new()
+	grad.set_color(0, Color(1.0 - contrast, 1.0 - contrast, 1.0 - contrast))
+	grad.set_color(1, Color(1, 1, 1))
+	tex.color_ramp = grad
+	mat.albedo_texture = tex
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST_WITH_MIPMAPS
+	mat.uv1_triplanar = true
+	mat.uv1_scale = Vector3.ONE * uv_scale
+	return mat
+
+
 func _build_terrain_and_roads() -> void:
 	var terrain := Node3D.new()
 	terrain.name = "Terrain"
 	add_child(terrain)
 
-	var mat_grass := RetroModelBuilder.make_retro_material(Color(0.24, 0.42, 0.19), 0.96, 0.0)
-	var mat_grass_dark := RetroModelBuilder.make_retro_material(Color(0.19, 0.35, 0.16), 0.96, 0.0)
-	var mat_dirt := RetroModelBuilder.make_retro_material(Color(0.46, 0.36, 0.24), 0.96, 0.0)
-	var mat_cobble := RetroModelBuilder.make_retro_material(Color(0.44, 0.44, 0.46), 0.92, 0.05)
+	var mat_grass := _noise_material(Color(0.26, 0.45, 0.20), 0.35)
+	var mat_grass_dark := _noise_material(Color(0.20, 0.37, 0.17), 0.25)
+	var mat_dirt := _noise_material(Color(0.50, 0.39, 0.26), 0.5, 0.25)
+	var mat_cobble := _noise_material(Color(0.48, 0.48, 0.50), 1.0, 0.45)
 
 	# Основная земля с коллизией
 	var ground_body := StaticBody3D.new()
@@ -260,7 +282,7 @@ func _build_forest_and_rocks() -> void:
 	var mat_trunk := RetroModelBuilder.make_retro_material(Color(0.34, 0.22, 0.12), 0.94, 0.0)
 	var mat_leaves_1 := RetroModelBuilder.make_retro_material(Color(0.14, 0.34, 0.14), 0.92, 0.0)
 	var mat_leaves_2 := RetroModelBuilder.make_retro_material(Color(0.18, 0.40, 0.16), 0.92, 0.0)
-	var mat_rock := RetroModelBuilder.make_retro_material(Color(0.45, 0.46, 0.48), 0.92, 0.04)
+	var mat_rock := _noise_material(Color(0.50, 0.50, 0.52), 0.8, 0.5)
 
 	var tree_positions: Array[Vector3] = [
 		Vector3(-14, 0, -4), Vector3(-20, 0, -14), Vector3(-16, 0, -24),
@@ -311,7 +333,7 @@ func _build_mine_entrance(origin: Vector3) -> void:
 	mine.position = origin
 	add_child(mine)
 
-	var mat_rock := RetroModelBuilder.make_retro_material(Color(0.36, 0.35, 0.38), 0.95, 0.04)
+	var mat_rock := _noise_material(Color(0.40, 0.38, 0.40), 0.5, 0.55)
 	var mat_dark := RetroModelBuilder.make_retro_material(Color(0.05, 0.05, 0.07), 1.0, 0.0)
 	var mat_timber := RetroModelBuilder.make_retro_material(Color(0.38, 0.24, 0.12), 0.92, 0.0)
 	var mat_crate := RetroModelBuilder.make_retro_material(Color(0.50, 0.34, 0.18), 0.88, 0.0)
@@ -376,8 +398,10 @@ func _spawn_spirit_healer(pos: Vector3) -> void:
 	var lbl := Label3D.new()
 	lbl.text = "<Кладбище>\nДух-целитель"
 	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	lbl.pixel_size = 0.0085
-	lbl.font_size = 34
+	lbl.fixed_size = true
+	lbl.pixel_size = 0.0006
+	lbl.font_size = 30
+	lbl.visibility_range_end = 40.0
 	lbl.outline_size = 8
 	lbl.modulate = Color(0.6, 0.85, 1.0)
 	lbl.position = Vector3(0, 2.6, 0)
