@@ -87,7 +87,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	anim_time += delta
 	if rig_node:
-		RetroModelBuilder.animate_humanoid(rig_node, "IDLE", anim_time)
+		RetroModelBuilder.animate_humanoid(rig_node, "IDLE", anim_time, 0.0, 0.0, 0.0, delta)
 	if quest_marker and quest_marker.visible:
 		quest_marker.position.y = 3.15 + sin(anim_time * 3.2) * 0.12
 

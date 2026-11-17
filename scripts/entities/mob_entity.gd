@@ -246,7 +246,7 @@ func _physics_process(delta: float) -> void:
 			loot_indicator.position.y = 0.65 + sin(anim_time * 4.0) * 0.12
 		if respawn_timer <= 0.0:
 			_respawn()
-		_update_animation()
+		_update_animation(delta)
 		return
 
 	if not is_on_floor():
@@ -282,7 +282,7 @@ func _physics_process(delta: float) -> void:
 			_process_evade_return(delta)
 
 	move_and_slide()
-	_update_animation()
+	_update_animation(delta)
 
 
 func _process_idle(delta: float, player: Node3D, player_alive: bool) -> void:
@@ -686,12 +686,16 @@ func _update_nameplate() -> void:
 		nameplate.modulate = Color(1.0, 0.42, 0.25) if is_elite else Color(0.96, 0.36, 0.32)
 
 
-func _update_animation() -> void:
+func _update_animation(delta: float) -> void:
 	if rig_node == null:
 		return
 	var anim_state: String = "IDLE"
 	if state == State.DEAD:
 		anim_state = "DEAD"
+	elif state == State.STUNNED:
+		anim_state = "STUNNED"
+	elif is_caster and enemy_cast_timer > 0.0:
+		anim_state = "CAST"
 	elif Vector2(velocity.x, velocity.z).length() > 0.25:
 		anim_state = "WALK"
 
@@ -700,7 +704,7 @@ func _update_animation() -> void:
 		atk_prog = 1.0 - (attack_anim_timer / 0.55)
 
 	if mob_id == "wolf":
-		RetroModelBuilder.animate_wolf(rig_node, anim_state, anim_time, atk_prog)
+		RetroModelBuilder.animate_wolf(rig_node, anim_state, anim_time, atk_prog, delta)
 	else:
 		var hunch: float = -0.30 if mob_id == "murloc" else (0.0 if mob_id == "bandit" else -0.26)
-		RetroModelBuilder.animate_humanoid(rig_node, anim_state, anim_time, atk_prog, 0.0, hunch)
+		RetroModelBuilder.animate_humanoid(rig_node, anim_state, anim_time, atk_prog, 0.0, hunch, delta)

@@ -289,7 +289,7 @@ func _physics_process(delta: float) -> void:
 			velocity.y -= GRAVITY * delta
 		move_and_slide()
 		_update_camera_and_ring(delta)
-		_update_animation()
+		_update_animation(delta)
 		return
 
 	if is_charging:
@@ -301,7 +301,7 @@ func _physics_process(delta: float) -> void:
 		_process_cast(delta)
 		_process_auto_attack()
 	_update_camera_and_ring(delta)
-	_update_animation()
+	_update_animation(delta)
 
 
 func _process_movement(delta: float) -> void:
@@ -1059,7 +1059,7 @@ func _update_camera_and_ring(_delta: float) -> void:
 			target_ring.visible = false
 
 
-func _update_animation() -> void:
+func _update_animation(delta: float) -> void:
 	if rig_node == null:
 		return
 	var anim_state: String = "IDLE"
@@ -1074,13 +1074,17 @@ func _update_animation() -> void:
 		spin = p * TAU * 2.0
 	elif is_charging:
 		anim_state = "CHARGE"
+	elif casting_slot != 0:
+		anim_state = "CAST"
+	elif not is_on_floor():
+		anim_state = "JUMP"
 	elif Vector2(velocity.x, velocity.z).length() > 0.35:
 		anim_state = "WALK"
 
 	if attack_anim_timer > 0.0:
 		atk_prog = 1.0 - (attack_anim_timer / 0.55)
 
-	RetroModelBuilder.animate_humanoid(rig_node, anim_state, anim_time, atk_prog, spin, 0.0)
+	RetroModelBuilder.animate_humanoid(rig_node, anim_state, anim_time, atk_prog, spin, 0.0, delta, {"dual_wield": GameState.player_class == "rogue"})
 
 
 func _on_target_changed(new_target: Node3D) -> void:
