@@ -121,6 +121,11 @@ var inv_items_vbox: VBoxContainer = null
 
 var help_window: PanelContainer = null
 var death_banner: PanelContainer = null
+var death_lbl: Label = null
+var release_btn: Button = null
+var res_corpse_btn: Button = null
+var res_healer_btn: Button = null
+var ghost_tint: ColorRect = null
 
 # Плавающий боевой текст
 var floating_layer: Control = null
@@ -175,6 +180,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		if key.pressed and not key.echo:
 			if key.physical_keycode == KEY_B:
 				_toggle_inventory()
+			elif key.physical_keycode == KEY_R:
+				if GameState.is_ghost:
+					_try_resurrect_corpse()
 			elif key.physical_keycode == KEY_H:
 				help_window.visible = not help_window.visible
 			elif key.physical_keycode == KEY_ESCAPE:
@@ -783,23 +791,86 @@ func _build_help_window() -> void:
 
 
 func _build_death_banner() -> void:
+	ghost_tint = ColorRect.new()
+	ghost_tint.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ghost_tint.color = Color(0.45, 0.6, 0.85, 0.22)
+	ghost_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ghost_tint.visible = false
+	root_control.add_child(ghost_tint)
+	root_control.move_child(ghost_tint, 0)
+
 	death_banner = PanelContainer.new()
 	death_banner.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	death_banner.offset_left = -210
+	death_banner.offset_left = -230
 	death_banner.offset_top = 110
-	death_banner.offset_right = 210
-	death_banner.offset_bottom = 172
+	death_banner.offset_right = 230
+	death_banner.offset_bottom = 230
 	death_banner.add_theme_stylebox_override("panel", _make_panel_style(Color(0.24, 0.04, 0.04, 0.92), Color(0.95, 0.25, 0.20), 2))
 	death_banner.visible = false
 	root_control.add_child(death_banner)
 
-	var lbl := Label.new()
-	lbl.text = "ВЫ ПОГИБЛИ!\nДух целителя воскресит вас у заставы..."
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.add_theme_font_size_override("font_size", 15)
-	lbl.modulate = Color(1.0, 0.85, 0.82)
-	death_banner.add_child(lbl)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 6)
+	death_banner.add_child(vbox)
+
+	death_lbl = Label.new()
+	death_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	death_lbl.add_theme_font_size_override("font_size", 15)
+	death_lbl.modulate = Color(1.0, 0.85, 0.82)
+	vbox.add_child(death_lbl)
+
+	release_btn = Button.new()
+	release_btn.text = "Освободить дух"
+	release_btn.focus_mode = Control.FOCUS_NONE
+	release_btn.pressed.connect(func() -> void: GameState.release_spirit())
+	vbox.add_child(release_btn)
+
+	res_corpse_btn = Button.new()
+	res_corpse_btn.text = "Воскреснуть у тела [R]"
+	res_corpse_btn.focus_mode = Control.FOCUS_NONE
+	res_corpse_btn.pressed.connect(_try_resurrect_corpse)
+	vbox.add_child(res_corpse_btn)
+
+	res_healer_btn = Button.new()
+	res_healer_btn.text = "Воскреснуть у Духа-целителя (25% здоровья)"
+	res_healer_btn.focus_mode = Control.FOCUS_NONE
+	res_healer_btn.pressed.connect(_try_resurrect_healer)
+	vbox.add_child(res_healer_btn)
+
+
+const CORPSE_RES_RADIUS := 12.0
+const HEALER_RES_RADIUS := 9.0
+
+
+func _corpse_distance() -> float:
+	var p: Node3D = GameState.player_node
+	if not is_instance_valid(p):
+		return INF
+	return p.global_position.distance_to(GameState.corpse_position)
+
+
+func _healer_distance() -> float:
+	var p: Node3D = GameState.player_node
+	if not is_instance_valid(p):
+		return INF
+	var best: float = INF
+	for n in get_tree().get_nodes_in_group("spirit_healer"):
+		best = minf(best, p.global_position.distance_to((n as Node3D).global_position))
+	return best
+
+
+func _try_resurrect_corpse() -> void:
+	if _corpse_distance() <= CORPSE_RES_RADIUS:
+		GameState.resurrect(true)
+	else:
+		GameState.add_combat_log("Вы слишком далеко от своего тела (нужно ближе %d м)." % int(CORPSE_RES_RADIUS), GameState.COLOR_LOG_ERROR)
+
+
+func _try_resurrect_healer() -> void:
+	if _healer_distance() <= HEALER_RES_RADIUS:
+		GameState.resurrect(false)
+	else:
+		GameState.add_combat_log("Подойдите ближе к Духу-целителю.", GameState.COLOR_LOG_ERROR)
 
 
 func _refresh_player_frame() -> void:
@@ -903,7 +974,23 @@ func _update_action_bar() -> void:
 
 
 func _update_death_banner() -> void:
-	death_banner.visible = GameState.is_dead
+	var dead: bool = GameState.is_dead
+	var ghost: bool = GameState.is_ghost
+	death_banner.visible = dead
+	ghost_tint.visible = ghost
+	if not dead:
+		return
+	release_btn.visible = not ghost
+	res_corpse_btn.visible = ghost
+	res_healer_btn.visible = ghost
+	if not ghost:
+		death_lbl.text = "ВЫ ПОГИБЛИ!\nОсвободите дух, чтобы вернуться на кладбище."
+	else:
+		var cd: float = _corpse_distance()
+		var hd: float = _healer_distance()
+		death_lbl.text = "Вы — бесплотный дух.\nДо тела: %d м | До Духа-целителя: %d м" % [int(cd), int(hd)]
+		res_corpse_btn.disabled = cd > CORPSE_RES_RADIUS
+		res_healer_btn.disabled = hd > HEALER_RES_RADIUS
 
 
 func _refresh_quest_tracker() -> void:

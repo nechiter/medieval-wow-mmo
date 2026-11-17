@@ -345,7 +345,55 @@ func _build_mine_entrance(origin: Vector3) -> void:
 		mine.add_child(torch_light)
 
 
+func _spawn_spirit_healer(pos: Vector3) -> void:
+	var healer := Node3D.new()
+	healer.name = "SpiritHealer"
+	healer.position = pos
+	healer.rotation.y = PI * 0.15
+	healer.add_to_group("spirit_healer")
+	add_child(healer)
+
+	var rig := RetroModelBuilder.build_humanoid({
+		"scale": 1.15,
+		"archetype": "guard",
+		"armor_color": Color(0.55, 0.75, 1.0),
+		"accent_color": Color(0.8, 0.92, 1.0),
+		"skin_color": Color(0.7, 0.85, 1.0),
+		"pants_color": Color(0.5, 0.65, 0.9),
+		"cape_color": Color(0.6, 0.8, 1.0),
+		"weapon_type": "shortsword",
+		"has_cape": true,
+	})
+	healer.add_child(rig)
+	RetroModelBuilder.animate_humanoid(rig, "IDLE", 0.0)
+	var stack: Array[Node] = [rig]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n is MeshInstance3D:
+			(n as MeshInstance3D).transparency = 0.5
+		stack.append_array(n.get_children())
+
+	var lbl := Label3D.new()
+	lbl.text = "<Кладбище>\nДух-целитель"
+	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lbl.pixel_size = 0.0085
+	lbl.font_size = 34
+	lbl.outline_size = 8
+	lbl.modulate = Color(0.6, 0.85, 1.0)
+	lbl.position = Vector3(0, 2.6, 0)
+	healer.add_child(lbl)
+
+	var light := OmniLight3D.new()
+	light.light_color = Color(0.5, 0.75, 1.0)
+	light.light_energy = 1.2
+	light.omni_range = 7.0
+	light.position = Vector3(0, 1.5, 0)
+	healer.add_child(light)
+
+
 func _spawn_entities() -> void:
+	_spawn_spirit_healer(Vector3(5.5, 0.08, 12.5))
+
 	# Игрок-Воин
 	var player := PlayerController.new()
 	player.name = "Player"

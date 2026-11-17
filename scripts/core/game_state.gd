@@ -10,7 +10,8 @@ signal loot_window_requested(mob_ref: Node3D)
 signal npc_dialog_requested(npc_ref: Node3D)
 signal player_leveled_up
 signal player_died
-signal player_respawned
+signal spirit_released
+signal player_resurrected(at_corpse: bool)
 
 const COLOR_LOG_SYSTEM := Color(1.0, 0.85, 0.35)
 const COLOR_LOG_COMBAT_PLAYER := Color(1.0, 1.0, 1.0)
@@ -50,6 +51,8 @@ var money_copper: int = 25
 var in_combat: bool = false
 var combat_timeout: float = 0.0
 var is_dead: bool = false
+var is_ghost: bool = false
+var corpse_position: Vector3 = Vector3.ZERO
 
 var current_target: Node3D = null
 var player_node: Node3D = null
@@ -276,18 +279,37 @@ func damage_player(amount: int, attacker_name: String) -> void:
 		is_dead = true
 		in_combat = false
 		rage = 0
-		add_combat_log("Вы погибли! Возрождение у заставы через 4 сек...", COLOR_LOG_ERROR)
+		is_ghost = false
+		if is_instance_valid(player_node):
+			corpse_position = player_node.global_position
+		add_combat_log("Вы погибли! Освободите дух и вернитесь к своему телу.", COLOR_LOG_ERROR)
 		player_died.emit()
 	player_stats_changed.emit()
 
 
-func respawn_player() -> void:
+func release_spirit() -> void:
+	if not is_dead or is_ghost:
+		return
+	is_ghost = true
+	add_combat_log("Ваш дух освобождён. Найдите своё тело или Духа-целителя на кладбище.", COLOR_LOG_SYSTEM)
+	spirit_released.emit()
+	player_stats_changed.emit()
+
+
+# at_corpse = true: воскрешение у тела (50% HP). false: у Духа-целителя (25% HP, без штрафов к карте).
+func resurrect(at_corpse: bool) -> void:
+	if not is_dead or not is_ghost:
+		return
 	is_dead = false
+	is_ghost = false
 	in_combat = false
 	rage = 0
-	hp = max_hp
-	add_combat_log("Дух целителя вернул вас к жизни у Сторожевой заставы.", COLOR_LOG_SYSTEM)
-	player_respawned.emit()
+	hp = maxi(1, int(round(max_hp * (0.5 if at_corpse else 0.25))))
+	if at_corpse:
+		add_combat_log("Вы воскресли у своего тела.", COLOR_LOG_SYSTEM)
+	else:
+		add_combat_log("Дух-целитель вернул вас к жизни, но вы ослаблены.", COLOR_LOG_SYSTEM)
+	player_resurrected.emit(at_corpse)
 	player_stats_changed.emit()
 
 

@@ -38,7 +38,7 @@ var charge_target: MobEntity = null
 var charge_timeout: float = 0.0
 
 var spawn_position: Vector3 = Vector3.ZERO
-var death_respawn_timer: float = 0.0
+var corpse_node: Node3D = null
 var tab_cycle_index: int = 0
 
 
@@ -57,7 +57,8 @@ func _ready() -> void:
 
 	GameState.player_leveled_up.connect(_on_level_up)
 	GameState.player_died.connect(_on_player_died)
-	GameState.player_respawned.connect(_on_player_respawned)
+	GameState.spirit_released.connect(_on_spirit_released)
+	GameState.player_resurrected.connect(_on_player_resurrected)
 	GameState.target_changed.connect(_on_target_changed)
 
 
@@ -234,15 +235,12 @@ func _physics_process(delta: float) -> void:
 	if swing_timer > 0.0:
 		swing_timer = maxf(0.0, swing_timer - delta)
 
-	if GameState.is_dead:
+	if GameState.is_dead and not GameState.is_ghost:
 		velocity.x = 0.0
 		velocity.z = 0.0
 		if not is_on_floor():
 			velocity.y -= GRAVITY * delta
 		move_and_slide()
-		death_respawn_timer -= delta
-		if death_respawn_timer <= 0.0:
-			GameState.respawn_player()
 		_update_camera_and_ring(delta)
 		_update_animation()
 		return
@@ -252,7 +250,8 @@ func _physics_process(delta: float) -> void:
 	else:
 		_process_movement(delta)
 
-	_process_auto_attack()
+	if not GameState.is_dead:
+		_process_auto_attack()
 	_update_camera_and_ring(delta)
 	_update_animation()
 
@@ -660,7 +659,7 @@ func _update_animation() -> void:
 	var atk_prog: float = 0.0
 	var spin: float = 0.0
 
-	if GameState.is_dead:
+	if GameState.is_dead and not GameState.is_ghost:
 		anim_state = "DEAD"
 	elif whirlwind_anim_timer > 0.0:
 		anim_state = "WHIRLWIND"
@@ -686,12 +685,61 @@ func _on_player_died() -> void:
 	auto_attack_enabled = false
 	is_charging = false
 	charge_target = null
-	death_respawn_timer = 4.0
+	_spawn_corpse()
+	if rig_node:
+		rig_node.visible = false
 
 
-func _on_player_respawned() -> void:
+func _spawn_corpse() -> void:
+	if is_instance_valid(corpse_node):
+		corpse_node.queue_free()
+	corpse_node = RetroModelBuilder.build_humanoid({
+		"scale": 1.05,
+		"archetype": "warrior",
+		"armor_color": Color(0.28, 0.34, 0.44),
+		"accent_color": Color(0.78, 0.60, 0.22),
+		"cape_color": Color(0.62, 0.12, 0.12),
+		"weapon_type": "greatsword",
+	})
+	get_parent().add_child(corpse_node)
+	corpse_node.global_position = global_position
+	corpse_node.rotation.y = rotation.y
+	RetroModelBuilder.animate_humanoid(corpse_node, "DEAD", 0.0)
+
+
+func _set_ghost_look(ghost: bool) -> void:
+	if rig_node == null:
+		return
+	rig_node.visible = true
+	for child in _collect_meshes(rig_node):
+		child.transparency = 0.6 if ghost else 0.0
+
+
+func _collect_meshes(node: Node) -> Array[MeshInstance3D]:
+	var result: Array[MeshInstance3D] = []
+	if node is MeshInstance3D:
+		result.append(node as MeshInstance3D)
+	for c in node.get_children():
+		result.append_array(_collect_meshes(c))
+	return result
+
+
+func _on_spirit_released() -> void:
 	global_position = spawn_position
 	velocity = Vector3.ZERO
+	_set_ghost_look(true)
+
+
+func _on_player_resurrected(at_corpse: bool) -> void:
+	if at_corpse:
+		global_position = GameState.corpse_position
+	else:
+		global_position = spawn_position
+	velocity = Vector3.ZERO
+	if is_instance_valid(corpse_node):
+		corpse_node.queue_free()
+		corpse_node = null
+	_set_ghost_look(false)
 	_spawn_level_up_pillar()
 
 
