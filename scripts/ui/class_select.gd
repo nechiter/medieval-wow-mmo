@@ -4,14 +4,20 @@ const CLASSES: Array[Dictionary] = [
 	{
 		"id": "warrior",
 		"title": "ВОИН",
-		"color": Color(0.80, 0.38, 0.28),
-		"desc": "Закованный в сталь боец ближнего боя.\nРесурс: Ярость (копится в бою).\n\nУмения: Рывок, Героический удар,\nВихрь, Боевой крик.\n\nМного здоровья, простой и надёжный бой.",
+		"color": Color(0.82, 0.38, 0.28),
+		"desc": "Закованный в сталь боец ближнего боя.\nРесурс: Ярость (копится в бою).\n\nУмения: Рывок, Героический удар,\nВихрь, Боевой крик.\n\nМного здоровья, простая и надёжная защита.",
 	},
 	{
 		"id": "mage",
 		"title": "МАГ",
-		"color": Color(0.35, 0.60, 1.0),
-		"desc": "Хрупкий повелитель огня и льда.\nРесурс: Мана (восстанавливается).\n\nУмения: Огненный шар, Ледяная стрела,\nКольцо льда, Скачок.\n\nАтакует издалека, но нужно держать дистанцию.",
+		"color": Color(0.35, 0.62, 1.0),
+		"desc": "Хрупкий повелитель огня и льда.\nРесурс: Мана (восстанавливается).\n\nУмения: Огненный шар, Ледяная стрела,\nКольцо льда, Скачок.\n\nБьёт издалека и замедляет врагов.",
+	},
+	{
+		"id": "rogue",
+		"title": "РАЗБОЙНИК",
+		"color": Color(0.98, 0.84, 0.26),
+		"desc": "Стремительный убийца в тенях.\nРесурс: Энергия + очки серии (1–5★).\n\nУмения: Коварный удар / Внезапный удар,\nПотрошение, Незаметность, Удар по почкам.\n\nКрадётся мимо врагов и наносит взрывной урон.",
 	},
 ]
 
@@ -29,7 +35,7 @@ func _ready() -> void:
 	add_child(center)
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 24)
+	vbox.add_theme_constant_override("separation", 20)
 	center.add_child(vbox)
 
 	var title := Label.new()
@@ -40,14 +46,23 @@ func _ready() -> void:
 	vbox.add_child(title)
 
 	var sub := Label.new()
-	sub.text = "Выберите класс героя"
+	sub.text = "Выберите класс героя или продолжите приключение"
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	sub.add_theme_font_size_override("font_size", 20)
+	sub.add_theme_font_size_override("font_size", 18)
 	sub.modulate = Color(0.85, 0.85, 0.9)
 	vbox.add_child(sub)
 
+	if GameState.has_save():
+		var cont_center := CenterContainer.new()
+		vbox.add_child(cont_center)
+		var cont_btn := Button.new()
+		cont_btn.text = "Продолжить сохранённую игру (%s)" % GameState.get_save_summary()
+		cont_btn.custom_minimum_size = Vector2(460, 46)
+		cont_btn.pressed.connect(_continue_saved)
+		cont_center.add_child(cont_btn)
+
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 32)
+	row.add_theme_constant_override("separation", 24)
 	vbox.add_child(row)
 
 	for cls in CLASSES:
@@ -56,7 +71,7 @@ func _ready() -> void:
 
 func _make_card(cls: Dictionary) -> Control:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(340, 330)
+	panel.custom_minimum_size = Vector2(310, 330)
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.09, 0.09, 0.13, 0.95)
 	sb.border_color = cls["color"]
@@ -75,7 +90,7 @@ func _make_card(cls: Dictionary) -> Control:
 	var name_lbl := Label.new()
 	name_lbl.text = cls["title"]
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	name_lbl.add_theme_font_size_override("font_size", 28)
+	name_lbl.add_theme_font_size_override("font_size", 26)
 	name_lbl.modulate = cls["color"]
 	v.add_child(name_lbl)
 
@@ -87,7 +102,7 @@ func _make_card(cls: Dictionary) -> Control:
 	v.add_child(desc)
 
 	var btn := Button.new()
-	btn.text = "Играть за класс «%s»" % String(cls["title"]).capitalize()
+	btn.text = "Начать: %s" % String(cls["title"]).capitalize()
 	btn.custom_minimum_size = Vector2(0, 44)
 	btn.pressed.connect(func() -> void: _choose(String(cls["id"])))
 	v.add_child(btn)
@@ -95,5 +110,12 @@ func _make_card(cls: Dictionary) -> Control:
 
 
 func _choose(class_id: String) -> void:
-	GameState.set_class(class_id)
+	AudioManager.play("ui_click")
+	GameState.reset_for_new_game(class_id)
 	get_tree().change_scene_to_file("res://scenes/main_world.tscn")
+
+
+func _continue_saved() -> void:
+	AudioManager.play("ui_click")
+	if GameState.load_game():
+		get_tree().change_scene_to_file("res://scenes/main_world.tscn")

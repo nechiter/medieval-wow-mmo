@@ -11,6 +11,8 @@ func _ready() -> void:
 	_build_campfire(Vector3(1.6, 0.0, 5.2))
 	_build_fences_and_props()
 	_build_forest_and_rocks()
+	_build_bandit_camp(Vector3(-32.0, 0.0, -18.0))
+	_build_crystal_lake(Vector3(36.0, 0.0, -20.0))
 	_build_mine_entrance(Vector3(0.0, 0.0, -59.0))
 	_spawn_entities()
 
@@ -121,24 +123,26 @@ func _build_terrain_and_roads() -> void:
 
 	var ground_col := CollisionShape3D.new()
 	var ground_shape := BoxShape3D.new()
-	ground_shape.size = Vector3(200.0, 2.0, 200.0)
+	ground_shape.size = Vector3(260.0, 2.0, 260.0)
 	ground_col.shape = ground_shape
-	ground_col.position = Vector3(0.0, -1.0, -22.0)
+	ground_col.position = Vector3(0.0, -1.0, -40.0)
 	ground_body.add_child(ground_col)
 
 	var ground_mesh := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(200.0, 200.0)
+	plane.size = Vector2(260.0, 260.0)
 	ground_mesh.mesh = plane
 	ground_mesh.material_override = mat_grass
-	ground_mesh.position = Vector3(0.0, 0.0, -22.0)
+	ground_mesh.position = Vector3(0.0, 0.0, -40.0)
 	terrain.add_child(ground_mesh)
 
-	# Грунтовая дорога от заставы к руднику (чуть приподнята без Z-fighting)
+	# Грунтовые дороги (север в рудник, запад к лагерю Братства, восток к озеру)
 	var road_segments: Array[Dictionary] = [
 		{"size": Vector3(5.8, 0.05, 22.0), "pos": Vector3(0.0, 0.02, 2.0), "rot": Vector3.ZERO},
-		{"size": Vector3(5.4, 0.05, 24.0), "pos": Vector3(0.5, 0.02, -20.0), "rot": Vector3(0, -4, 0)},
-		{"size": Vector3(6.2, 0.05, 24.0), "pos": Vector3(0.2, 0.02, -43.0), "rot": Vector3(0, 3, 0)},
+		{"size": Vector3(5.4, 0.05, 26.0), "pos": Vector3(0.3, 0.02, -20.0), "rot": Vector3(0, -3, 0)},
+		{"size": Vector3(6.2, 0.05, 28.0), "pos": Vector3(0.1, 0.02, -45.0), "rot": Vector3(0, 2, 0)},
+		{"size": Vector3(26.0, 0.05, 4.4), "pos": Vector3(-14.0, 0.02, -18.0), "rot": Vector3(0, 4, 0)},
+		{"size": Vector3(22.0, 0.05, 4.4), "pos": Vector3(13.0, 0.02, -18.5), "rot": Vector3(0, -4, 0)},
 	]
 	for seg in road_segments:
 		_make_static_box(terrain, seg["size"], seg["pos"], mat_dirt, seg["rot"], false)
@@ -146,13 +150,14 @@ func _build_terrain_and_roads() -> void:
 	# Площадь из брусчатки у заставы
 	_make_static_box(terrain, Vector3(14.0, 0.07, 13.0), Vector3(-2.5, 0.03, 5.5), mat_cobble, Vector3.ZERO, false)
 
-	# Низкополигональные холмы по краям долины (ограждают игровую зону)
+	# Низкополигональные холмы по внешнему периметру долины
 	var hills: Array[Dictionary] = [
-		{"size": Vector3(36, 12, 28), "pos": Vector3(-54, 4.0, -15), "rot": Vector3(0, 12, -10)},
-		{"size": Vector3(36, 14, 34), "pos": Vector3(54, 5.0, -20), "rot": Vector3(0, -14, 12)},
-		{"size": Vector3(44, 15, 28), "pos": Vector3(-34, 5.5, -72), "rot": Vector3(8, 18, 0)},
-		{"size": Vector3(44, 15, 28), "pos": Vector3(34, 5.5, -72), "rot": Vector3(8, -18, 0)},
-		{"size": Vector3(68, 10, 24), "pos": Vector3(0, 3.5, 42), "rot": Vector3(-10, 0, 0)},
+		{"size": Vector3(36, 14, 70), "pos": Vector3(-68, 5.0, -24), "rot": Vector3(0, 8, -10)},
+		{"size": Vector3(36, 14, 70), "pos": Vector3(68, 5.0, -24), "rot": Vector3(0, -8, 10)},
+		{"size": Vector3(56, 16, 36), "pos": Vector3(-38, 6.0, -82), "rot": Vector3(8, 14, 0)},
+		{"size": Vector3(56, 16, 36), "pos": Vector3(38, 6.0, -82), "rot": Vector3(8, -14, 0)},
+		{"size": Vector3(60, 18, 32), "pos": Vector3(0, 6.5, -122), "rot": Vector3(10, 0, 0)},
+		{"size": Vector3(86, 10, 26), "pos": Vector3(0, 3.5, 46), "rot": Vector3(-10, 0, 0)},
 	]
 	for h in hills:
 		_make_static_box(terrain, h["size"], h["pos"], mat_grass_dark, h["rot"], true)
@@ -265,7 +270,7 @@ func _build_fences_and_props() -> void:
 	_make_static_box(props, Vector3(1.5, 0.45, 0.10), Vector3(3.3, 1.95, -6.5), mat_sign, Vector3(0, 14, 0), false)
 
 	var sign_lbl := Label3D.new()
-	sign_lbl.text = "↑ Северный рудник\nВолчий лес"
+	sign_lbl.text = "↑ Северный рудник\n← Братство | → Озеро"
 	sign_lbl.font_size = 24
 	sign_lbl.pixel_size = 0.008
 	sign_lbl.modulate = Color(0.16, 0.10, 0.05)
@@ -285,12 +290,13 @@ func _build_forest_and_rocks() -> void:
 	var mat_rock := _noise_material(Color(0.50, 0.50, 0.52), 0.8, 0.5)
 
 	var tree_positions: Array[Vector3] = [
-		Vector3(-14, 0, -4), Vector3(-20, 0, -14), Vector3(-16, 0, -24),
-		Vector3(-24, 0, -32), Vector3(-18, 0, -42), Vector3(-22, 0, 8),
-		Vector3(14, 0, -6), Vector3(20, 0, -16), Vector3(15, 0, -26),
-		Vector3(24, 0, -34), Vector3(18, 0, -45), Vector3(16, 0, 8),
-		Vector3(-12, 0, 18), Vector3(13, 0, 18), Vector3(-26, 0, -2),
-		Vector3(26, 0, -4), Vector3(-8, 0, -32), Vector3(9, 0, -30),
+		Vector3(-14, 0, -4), Vector3(-20, 0, -6), Vector3(-16, 0, -29),
+		Vector3(-26, 0, -35), Vector3(-18, 0, -44), Vector3(-22, 0, 8),
+		Vector3(14, 0, -5), Vector3(19, 0, -6), Vector3(15, 0, -31),
+		Vector3(24, 0, -38), Vector3(18, 0, -46), Vector3(16, 0, 8),
+		Vector3(-12, 0, 18), Vector3(13, 0, 18), Vector3(-44, 0, -8),
+		Vector3(-46, 0, -28), Vector3(50, 0, -6), Vector3(50, 0, -34),
+		Vector3(-8, 0, -32), Vector3(9, 0, -30),
 	]
 
 	for i in range(tree_positions.size()):
@@ -327,44 +333,163 @@ func _build_forest_and_rocks() -> void:
 		_make_static_box(forest, r["size"], r["pos"], mat_rock, r["rot"], true)
 
 
+func _build_bandit_camp(origin: Vector3) -> void:
+	var camp := Node3D.new()
+	camp.name = "BanditCamp"
+	camp.position = origin
+	add_child(camp)
+
+	var mat_dirt := _noise_material(Color(0.45, 0.34, 0.22), 0.6, 0.25)
+	var mat_wood := RetroModelBuilder.make_retro_material(Color(0.38, 0.24, 0.12), 0.90, 0.0)
+	var mat_tent := RetroModelBuilder.make_retro_material(Color(0.60, 0.16, 0.14), 0.88, 0.0)
+	var mat_ember := RetroModelBuilder.make_retro_material(Color(1.0, 0.45, 0.08), 0.3, 0.0, Color(1.0, 0.42, 0.05), 2.5)
+
+	_make_static_box(camp, Vector3(16.0, 0.05, 15.0), Vector3(0, 0.02, 0), mat_dirt, Vector3.ZERO, false)
+
+	# Шатёр разбойников Братства
+	_make_static_box(camp, Vector3(0.24, 2.8, 0.24), Vector3(-4.5, 1.4, -3.5), mat_wood)
+	_make_static_box(camp, Vector3(0.24, 2.8, 0.24), Vector3(-1.0, 1.4, -3.5), mat_wood)
+	_make_static_box(camp, Vector3(4.2, 0.18, 3.6), Vector3(-2.75, 2.75, -4.6), mat_tent, Vector3(24, 0, 0), true)
+
+	# Костёр лагеря
+	_make_static_box(camp, Vector3(0.6, 0.18, 0.6), Vector3(0.5, 0.09, 0.5), mat_ember, Vector3.ZERO, false)
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.52, 0.18)
+	light.light_energy = 1.8
+	light.omni_range = 10.0
+	light.position = Vector3(0.5, 0.8, 0.5)
+	camp.add_child(light)
+
+	# Частокол
+	for dz in [-5.5, -2.5, 2.5, 5.5]:
+		_make_static_box(camp, Vector3(0.5, 1.6, 1.6), Vector3(-7.2, 0.8, dz), mat_wood, Vector3(0, 8, 0))
+
+	# 3 квестовых ящика припасов
+	var crate_offsets: Array[Vector3] = [
+		Vector3(-2.8, 0.0, -4.8),
+		Vector3(3.8, 0.0, -2.5),
+		Vector3(-2.0, 0.0, 5.0),
+	]
+	for idx in range(crate_offsets.size()):
+		var crate := InteractableProp.new()
+		crate.name = "SupplyCrate_%d" % (idx + 1)
+		crate.prop_id = "supply_crate"
+		crate.prop_title = "Ящик припасов"
+		crate.position = origin + crate_offsets[idx]
+		add_child(crate)
+
+
+func _build_crystal_lake(origin: Vector3) -> void:
+	var lake := Node3D.new()
+	lake.name = "CrystalLake"
+	lake.position = origin
+	add_child(lake)
+
+	var mat_sand := _noise_material(Color(0.70, 0.62, 0.44), 0.7, 0.2)
+	var mat_wood := RetroModelBuilder.make_retro_material(Color(0.42, 0.28, 0.15), 0.90, 0.0)
+	var mat_water := StandardMaterial3D.new()
+	mat_water.albedo_color = Color(0.16, 0.52, 0.74, 0.80)
+	mat_water.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat_water.roughness = 0.20
+	mat_water.metallic = 0.15
+	mat_water.emission_enabled = true
+	mat_water.emission = Color(0.08, 0.28, 0.42)
+	mat_water.emission_energy_multiplier = 0.45
+
+	# Песчаный берег и сияющая гладь воды
+	_make_static_box(lake, Vector3(27.0, 0.05, 27.0), Vector3(0, 0.02, 0), mat_sand, Vector3.ZERO, false)
+	var water_mi := MeshInstance3D.new()
+	var wp := PlaneMesh.new()
+	wp.size = Vector2(22.0, 22.0)
+	water_mi.mesh = wp
+	water_mi.material_override = mat_water
+	water_mi.position = Vector3(1.5, 0.06, 0)
+	lake.add_child(water_mi)
+
+	# Деревянный причал
+	_make_static_box(lake, Vector3(8.5, 0.22, 2.8), Vector3(-10.0, 0.22, 1.5), mat_wood, Vector3.ZERO, true)
+	for px in [-13.5, -10.0, -6.5]:
+		for pz in [0.4, 2.6]:
+			_make_static_box(lake, Vector3(0.28, 0.7, 0.28), Vector3(px, 0.35, pz), mat_wood, Vector3.ZERO, false)
+
+
 func _build_mine_entrance(origin: Vector3) -> void:
 	var mine := Node3D.new()
 	mine.name = "NorthernMine"
 	mine.position = origin
 	add_child(mine)
 
-	var mat_rock := _noise_material(Color(0.40, 0.38, 0.40), 0.5, 0.55)
-	var mat_dark := RetroModelBuilder.make_retro_material(Color(0.05, 0.05, 0.07), 1.0, 0.0)
+	var mat_rock := _noise_material(Color(0.36, 0.34, 0.37), 0.5, 0.55)
+	var mat_floor := _noise_material(Color(0.28, 0.26, 0.28), 0.6, 0.4)
 	var mat_timber := RetroModelBuilder.make_retro_material(Color(0.38, 0.24, 0.12), 0.92, 0.0)
 	var mat_crate := RetroModelBuilder.make_retro_material(Color(0.50, 0.34, 0.18), 0.88, 0.0)
 	var mat_torch := RetroModelBuilder.make_retro_material(Color(1.0, 0.65, 0.18), 0.3, 0.0, Color(1.0, 0.55, 0.10), 2.8)
+	var mat_ore := RetroModelBuilder.make_retro_material(Color(0.35, 0.78, 1.0), 0.25, 0.3, Color(0.28, 0.68, 1.0), 2.2)
 
-	# Скальная гряда вокруг входа в шахту
-	_make_static_box(mine, Vector3(11.0, 9.0, 7.0), Vector3(-8.5, 4.5, 0), mat_rock, Vector3(0, 8, 0))
-	_make_static_box(mine, Vector3(11.0, 9.0, 7.0), Vector3(8.5, 4.5, 0), mat_rock, Vector3(0, -8, 0))
-	_make_static_box(mine, Vector3(12.0, 4.5, 7.5), Vector3(0, 6.8, 0), mat_rock)
-	# Чёрный провал тоннеля шахты
-	_make_static_box(mine, Vector3(6.2, 4.8, 2.0), Vector3(0, 2.4, -1.6), mat_dark)
+	# Входная скальная арка (проходимая! ширина проёма 9 м, высота 6 м)
+	_make_static_box(mine, Vector3(11.0, 9.5, 7.0), Vector3(-10.0, 4.75, 0), mat_rock)
+	_make_static_box(mine, Vector3(11.0, 9.5, 7.0), Vector3(10.0, 4.75, 0), mat_rock)
+	_make_static_box(mine, Vector3(12.0, 3.6, 7.2), Vector3(0, 8.0, 0), mat_rock)
 
-	# Деревянные балки входа в рудник
-	_make_static_box(mine, Vector3(0.65, 5.2, 0.65), Vector3(-3.1, 2.6, 2.8), mat_timber)
-	_make_static_box(mine, Vector3(0.65, 5.2, 0.65), Vector3(3.1, 2.6, 2.8), mat_timber)
-	_make_static_box(mine, Vector3(7.4, 0.7, 0.8), Vector3(0, 5.0, 2.8), mat_timber)
+	# Деревянные балки входа
+	_make_static_box(mine, Vector3(0.65, 6.2, 0.65), Vector3(-4.2, 3.1, 3.2), mat_timber)
+	_make_static_box(mine, Vector3(0.65, 6.2, 0.65), Vector3(4.2, 3.1, 3.2), mat_timber)
+	_make_static_box(mine, Vector3(9.4, 0.7, 0.8), Vector3(0, 6.1, 3.2), mat_timber)
 
-	# Ящики и бочки шахтёров-кобольдов
-	_make_static_box(mine, Vector3(1.3, 1.3, 1.3), Vector3(-5.2, 0.65, 5.5), mat_crate, Vector3(0, 20, 0))
-	_make_static_box(mine, Vector3(1.1, 1.1, 1.1), Vector3(-6.6, 0.55, 6.2), mat_crate, Vector3(0, -12, 0))
-	_make_static_box(mine, Vector3(1.4, 1.4, 1.4), Vector3(5.6, 0.7, 6.4), mat_crate, Vector3(0, 35, 0))
+	# Подземный тоннель (от z=-3.5 до z=-22 в локальных координатах -> мировой Z = -62.5..-81)
+	_make_static_box(mine, Vector3(10.0, 0.08, 22.0), Vector3(0, 0.03, -12.0), mat_floor, Vector3.ZERO, false)
+	_make_static_box(mine, Vector3(4.0, 7.5, 22.0), Vector3(-6.5, 3.75, -12.0), mat_rock)
+	_make_static_box(mine, Vector3(4.0, 7.5, 22.0), Vector3(6.5, 3.75, -12.0), mat_rock)
+	_make_static_box(mine, Vector3(17.0, 1.8, 22.0), Vector3(0, 7.6, -12.0), mat_rock)
 
-	# Факелы у входа
-	for sx in [-3.4, 3.4]:
-		_make_static_box(mine, Vector3(0.24, 0.24, 0.24), Vector3(sx, 3.2, 3.2), mat_torch, Vector3.ZERO, false)
-		var torch_light := OmniLight3D.new()
-		torch_light.light_color = Color(1.0, 0.58, 0.20)
-		torch_light.light_energy = 2.0
-		torch_light.omni_range = 10.0
-		torch_light.position = Vector3(sx, 3.3, 3.6)
-		mine.add_child(torch_light)
+	# Большой зал рудника (от z=-22 до z=-47 -> мировой Z = -81..-106)
+	_make_static_box(mine, Vector3(24.0, 0.08, 26.0), Vector3(0, 0.03, -34.0), mat_floor, Vector3.ZERO, false)
+	_make_static_box(mine, Vector3(4.0, 9.0, 26.0), Vector3(-13.5, 4.5, -34.0), mat_rock)
+	_make_static_box(mine, Vector3(4.0, 9.0, 26.0), Vector3(13.5, 4.5, -34.0), mat_rock)
+	_make_static_box(mine, Vector3(10.0, 9.0, 4.0), Vector3(-9.0, 4.5, -22.0), mat_rock)
+	_make_static_box(mine, Vector3(10.0, 9.0, 4.0), Vector3(9.0, 4.5, -22.0), mat_rock)
+	_make_static_box(mine, Vector3(30.0, 9.0, 4.0), Vector3(0, 4.5, -47.0), mat_rock)
+	_make_static_box(mine, Vector3(30.0, 1.8, 28.0), Vector3(0, 9.2, -34.0), mat_rock)
+
+	# Подпорки тоннеля, факелы и жилы руды
+	for tz in [3.2, -6.0, -14.0, -21.0]:
+		if tz < 2.0:
+			_make_static_box(mine, Vector3(0.55, 6.4, 0.55), Vector3(-4.1, 3.2, tz), mat_timber)
+			_make_static_box(mine, Vector3(0.55, 6.4, 0.55), Vector3(4.1, 3.2, tz), mat_timber)
+			_make_static_box(mine, Vector3(8.8, 0.55, 0.55), Vector3(0, 6.4, tz), mat_timber)
+		for sx in [-3.7, 3.7]:
+			_make_static_box(mine, Vector3(0.24, 0.24, 0.24), Vector3(sx, 3.2, tz + 0.35), mat_torch, Vector3.ZERO, false)
+			var tl := OmniLight3D.new()
+			tl.light_color = Color(1.0, 0.58, 0.20)
+			tl.light_energy = 1.9
+			tl.omni_range = 12.0
+			tl.position = Vector3(sx, 3.3, tz + 0.6)
+			mine.add_child(tl)
+
+	# Освещение и кристаллы в глубине зала
+	for pos in [Vector3(-8.5, 4.0, -31.0), Vector3(8.5, 4.0, -31.0), Vector3(0.0, 5.0, -40.0)]:
+		var cl := OmniLight3D.new()
+		cl.light_color = Color(0.95, 0.68, 0.32)
+		cl.light_energy = 2.4
+		cl.omni_range = 18.0
+		cl.position = pos
+		mine.add_child(cl)
+
+	for ore_pos in [Vector3(-11.0, 1.2, -30.0), Vector3(11.0, 1.4, -36.0), Vector3(-7.0, 1.0, -44.0), Vector3(7.0, 1.1, -44.0)]:
+		_make_static_box(mine, Vector3(0.9, 1.6, 0.9), ore_pos, mat_ore, Vector3(12, 24, 10), true)
+
+	# Ящики у входа и в пещере
+	_make_static_box(mine, Vector3(1.3, 1.3, 1.3), Vector3(-5.8, 0.65, 5.5), mat_crate, Vector3(0, 20, 0))
+	_make_static_box(mine, Vector3(1.1, 1.1, 1.1), Vector3(-7.2, 0.55, 6.2), mat_crate, Vector3(0, -12, 0))
+	_make_static_box(mine, Vector3(1.4, 1.4, 1.4), Vector3(6.2, 0.7, 6.4), mat_crate, Vector3(0, 35, 0))
+
+	# Сундук с сокровищами за спиной босса Дробителя
+	var chest := InteractableProp.new()
+	chest.name = "MineBossChest"
+	chest.prop_id = "mine_chest"
+	chest.prop_title = "Богатый сундук рудокопа"
+	chest.position = origin + Vector3(0.0, 0.0, -42.5)
+	add_child(chest)
 
 
 func _spawn_spirit_healer(pos: Vector3) -> void:
@@ -415,6 +540,15 @@ func _spawn_spirit_healer(pos: Vector3) -> void:
 	healer.add_child(light)
 
 
+func _spawn_mob_group(prefix: String, cfg: Dictionary, positions: Array[Vector3]) -> void:
+	for i in range(positions.size()):
+		var mob := MobEntity.new()
+		mob.name = "%s_%d" % [prefix, i + 1]
+		mob.configure(cfg)
+		mob.position = positions[i]
+		add_child(mob)
+
+
 func _spawn_entities() -> void:
 	_spawn_spirit_healer(Vector3(5.5, 0.08, 12.5))
 
@@ -427,74 +561,117 @@ func _spawn_entities() -> void:
 	merchant.rotation.y = PI * 0.5
 	add_child(merchant)
 
-	# Игрок-Воин
 	var player := PlayerController.new()
 	player.name = "Player"
 	player.position = Vector3(0.0, 0.1, 10.5)
 	add_child(player)
 
-	# Квестодатель Капитан Маркус
 	var npc := QuestNPC.new()
 	npc.name = "CaptainMarcus"
 	npc.position = Vector3(2.8, 0.08, 3.4)
 	npc.rotation.y = PI - 0.35
 	add_child(npc)
 
-	# Лесные волки (4 шт.)
-	var wolf_spawns: Array[Vector3] = [
+	_spawn_mob_group("ForestWolf", {
+		"mob_id": "wolf",
+		"mob_title": "Лесной волк",
+		"level": 1,
+		"is_elite": false,
+		"max_hp": 72,
+		"damage_min": 5,
+		"damage_max": 9,
+		"aggro_radius": 8.0,
+		"attack_range": 2.5,
+		"attack_interval": 1.9,
+		"move_speed": 4.6,
+		"xp_reward": 35,
+	}, [
 		Vector3(-9.0, 0.1, -13.0),
 		Vector3(8.5, 0.1, -15.5),
 		Vector3(-6.5, 0.1, -23.0),
 		Vector3(9.5, 0.1, -25.0),
-	]
-	for i in range(wolf_spawns.size()):
-		var wolf := MobEntity.new()
-		wolf.name = "ForestWolf_%d" % (i + 1)
-		wolf.configure({
-			"mob_id": "wolf",
-			"mob_title": "Лесной волк",
-			"level": 1,
-			"is_elite": false,
-			"max_hp": 72,
-			"damage_min": 5,
-			"damage_max": 9,
-			"aggro_radius": 8.0,
-			"attack_range": 2.5,
-			"attack_interval": 1.9,
-			"move_speed": 4.6,
-			"xp_reward": 35,
-		})
-		wolf.position = wolf_spawns[i]
-		add_child(wolf)
+	])
 
-	# Кобольды-шахтёры (4 шт.)
-	var kobold_spawns: Array[Vector3] = [
+	_spawn_mob_group("KoboldMiner", {
+		"mob_id": "kobold",
+		"mob_title": "Кобольд-шахтёр",
+		"level": 2,
+		"is_elite": false,
+		"max_hp": 92,
+		"damage_min": 7,
+		"damage_max": 12,
+		"aggro_radius": 8.8,
+		"attack_range": 2.7,
+		"attack_interval": 2.1,
+		"move_speed": 4.2,
+		"xp_reward": 48,
+	}, [
 		Vector3(-8.0, 0.1, -35.0),
 		Vector3(7.5, 0.1, -36.5),
 		Vector3(-6.5, 0.1, -45.0),
 		Vector3(8.0, 0.1, -44.5),
-	]
-	for i in range(kobold_spawns.size()):
-		var kobold := MobEntity.new()
-		kobold.name = "KoboldMiner_%d" % (i + 1)
-		kobold.configure({
-			"mob_id": "kobold",
-			"mob_title": "Кобольд-шахтёр",
-			"level": 2,
-			"is_elite": false,
-			"max_hp": 92,
-			"damage_min": 7,
-			"damage_max": 12,
-			"aggro_radius": 8.8,
-			"attack_range": 2.7,
-			"attack_interval": 2.1,
-			"move_speed": 4.2,
-			"xp_reward": 48,
-		})
-		kobold.position = kobold_spawns[i]
-		add_child(kobold)
+	])
 
-	# Босс Надзиратель Дробитель у рудника
+	_spawn_mob_group("DefiasBandit", {
+		"mob_id": "bandit",
+		"mob_title": "Головорез Братства",
+		"level": 2,
+		"is_elite": false,
+		"max_hp": 96,
+		"damage_min": 7,
+		"damage_max": 12,
+		"aggro_radius": 8.5,
+		"attack_range": 2.6,
+		"attack_interval": 2.0,
+		"move_speed": 4.4,
+		"xp_reward": 52,
+	}, [
+		Vector3(-27.0, 0.1, -16.0),
+		Vector3(-34.0, 0.1, -14.0),
+		Vector3(-30.0, 0.1, -22.5),
+		Vector3(-37.0, 0.1, -21.0),
+	])
+
+	_spawn_mob_group("MurlocHunter", {
+		"mob_id": "murloc",
+		"mob_title": "Мурлок-охотник",
+		"level": 2,
+		"is_elite": false,
+		"max_hp": 88,
+		"damage_min": 6,
+		"damage_max": 11,
+		"aggro_radius": 8.5,
+		"attack_range": 2.6,
+		"attack_interval": 1.85,
+		"move_speed": 4.7,
+		"xp_reward": 50,
+	}, [
+		Vector3(27.0, 0.1, -13.0),
+		Vector3(31.0, 0.1, -27.0),
+		Vector3(41.0, 0.1, -10.0),
+		Vector3(44.0, 0.1, -24.0),
+		Vector3(24.0, 0.1, -23.0),
+	])
+
+	_spawn_mob_group("KoboldGeomancer", {
+		"mob_id": "kobold_geomancer",
+		"mob_title": "Кобольд-геомант",
+		"level": 3,
+		"is_elite": false,
+		"max_hp": 105,
+		"damage_min": 9,
+		"damage_max": 14,
+		"aggro_radius": 11.0,
+		"attack_range": 12.0,
+		"attack_interval": 2.4,
+		"move_speed": 4.0,
+		"xp_reward": 68,
+		"is_caster": true,
+	}, [
+		Vector3(-5.0, 0.1, -84.0),
+		Vector3(5.0, 0.1, -86.0),
+	])
+
 	var boss := MobEntity.new()
 	boss.name = "OverseerCrusher"
 	boss.configure({
@@ -502,14 +679,14 @@ func _spawn_entities() -> void:
 		"mob_title": "Надзиратель Дробитель",
 		"level": 3,
 		"is_elite": true,
-		"max_hp": 225,
+		"max_hp": 235,
 		"damage_min": 12,
 		"damage_max": 18,
 		"aggro_radius": 9.5,
 		"attack_range": 3.2,
 		"attack_interval": 2.2,
 		"move_speed": 4.1,
-		"xp_reward": 115,
+		"xp_reward": 135,
 	})
-	boss.position = Vector3(0.0, 0.1, -52.5)
+	boss.position = Vector3(0.0, 0.1, -94.5)
 	add_child(boss)

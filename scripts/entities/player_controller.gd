@@ -7,6 +7,7 @@ const BACKPEDAL_SPEED := 4.8
 const TURN_SPEED := 2.6
 const JUMP_VELOCITY := 9.2
 const SWING_INTERVAL := 1.9
+const DAGGER_INTERVAL := 1.3
 const MELEE_RANGE := 3.9
 const WAND_RANGE := 22.0
 const WAND_INTERVAL := 1.7
@@ -56,6 +57,10 @@ func _ready() -> void:
 	collision_mask = 1
 	GameState.player_node = self
 	spawn_position = global_position
+	if GameState.has_pending_load_transform:
+		GameState.has_pending_load_transform = false
+		global_position = GameState.pending_load_pos
+		rotation.y = GameState.pending_load_yaw
 	cam_yaw = rotation.y
 
 	_build_collision()
@@ -68,6 +73,7 @@ func _ready() -> void:
 	GameState.spirit_released.connect(_on_spirit_released)
 	GameState.player_resurrected.connect(_on_player_resurrected)
 	GameState.target_changed.connect(_on_target_changed)
+	GameState.player_stats_changed.connect(_refresh_transparency)
 
 
 func _build_collision() -> void:
@@ -94,6 +100,21 @@ func _visual_config() -> Dictionary:
 			"eye_color": Color(0.35, 0.70, 1.0),
 			"weapon_type": "staff",
 			"has_cape": true,
+		}
+	if GameState.player_class == "rogue":
+		return {
+			"scale": 1.02,
+			"archetype": "rogue",
+			"armor_color": Color(0.18, 0.19, 0.23),
+			"accent_color": Color(0.65, 0.18, 0.18),
+			"skin_color": Color(0.86, 0.69, 0.55),
+			"pants_color": Color(0.14, 0.14, 0.16),
+			"cape_color": Color(0.22, 0.10, 0.12),
+			"hair_color": Color(0.15, 0.12, 0.10),
+			"eye_color": Color(0.25, 0.85, 0.45),
+			"weapon_type": "dagger",
+			"has_cape": true,
+			"has_offhand_dagger": true,
 		}
 	return {
 		"scale": 1.05,
@@ -389,18 +410,22 @@ func _process_auto_attack() -> void:
 		return
 
 	var is_mage: bool = GameState.player_class == "mage"
+	var is_rogue: bool = GameState.player_class == "rogue"
 	var dist: float = global_position.distance_to(mob.global_position)
 	var reach: float = WAND_RANGE if is_mage else MELEE_RANGE
-	var interval: float = WAND_INTERVAL if is_mage else SWING_INTERVAL
+	var interval: float = WAND_INTERVAL if is_mage else (DAGGER_INTERVAL if is_rogue else SWING_INTERVAL)
 	if dist <= reach and swing_timer <= 0.0:
 		swing_timer = interval
 		attack_anim_timer = 0.52
 		_face_target(mob.global_position)
+		if GameState.is_stealthed:
+			GameState.is_stealthed = false
+			GameState.player_stats_changed.emit()
 		if is_mage:
 			var info: Dictionary = GameState.get_attack_damage(0.7, 0)
 			_fire_projectile(mob, Color(0.7, 0.55, 1.0), info, "Автоатака", 0.0, 0.22)
 		else:
-			var dmg_info: Dictionary = GameState.get_attack_damage(1.0, 0)
+			var dmg_info: Dictionary = GameState.get_attack_damage(0.82 if is_rogue else 1.0, 0)
 			mob.take_damage(int(dmg_info["damage"]), self, "Автоатака", bool(dmg_info["is_crit"]))
 			GameState.add_rage(15)
 		GameState.touch_combat()
@@ -451,9 +476,11 @@ func _process_cast(delta: float) -> void:
 func _finish_cast(slot: int, mob: MobEntity) -> void:
 	attack_anim_timer = 0.5
 	if slot == 2:
+		AudioManager.play("cast_fire")
 		var info: Dictionary = GameState.get_attack_damage(2.4, 10)
 		_fire_projectile(mob, Color(1.0, 0.45, 0.12), info, "Огненный шар", 0.0, 0.32)
 	elif slot == 3:
+		AudioManager.play("cast_frost")
 		var info2: Dictionary = GameState.get_attack_damage(1.5, 5)
 		_fire_projectile(mob, Color(0.45, 0.8, 1.0), info2, "Ледяная стрела", 4.0, 0.26)
 	GameState.touch_combat()
@@ -538,7 +565,7 @@ func _trigger_mage_ability(slot: int) -> void:
 			if not GameState.spend_rage(cost):
 				GameState.add_combat_log("Недостаточно маны (нужно %d)." % cost, GameState.COLOR_LOG_ERROR)
 				return
-			GameState.ability_cooldowns[cd_key] = GameState.ability_max_cooldowns[cd_key] + cast_time
+			GameState.ability_cooldowns[cd_key] = cast_time + 0.35
 			_begin_cast(slot, cast_time, target)
 			GameState.touch_combat()
 		4:
@@ -551,6 +578,7 @@ func _trigger_mage_ability(slot: int) -> void:
 			_cancel_cast()
 			GameState.ability_cooldowns["frost_nova"] = GameState.ability_max_cooldowns["frost_nova"]
 			attack_anim_timer = 0.5
+			AudioManager.play("cast_frost")
 			GameState.touch_combat()
 			_spawn_ring_fx(global_position + Vector3(0, 0.3, 0), Color(0.55, 0.85, 1.0), 0.8, 6.4, 0.5)
 			var hits: int = 0
@@ -573,6 +601,7 @@ func _trigger_mage_ability(slot: int) -> void:
 				return
 			_cancel_cast()
 			GameState.ability_cooldowns["blink"] = GameState.ability_max_cooldowns["blink"]
+			AudioManager.play("stealth")
 			var fwd: Vector3 = -global_transform.basis.z
 			fwd.y = 0.0
 			fwd = fwd.normalized()
@@ -591,12 +620,138 @@ func _trigger_mage_ability(slot: int) -> void:
 			GameState.add_combat_log("Вы совершаете «Скачок» вперёд.", GameState.COLOR_LOG_SPELL)
 
 
+func _trigger_rogue_ability(slot: int) -> void:
+	match slot:
+		1:
+			if auto_attack_enabled:
+				auto_attack_enabled = false
+				GameState.add_combat_log("Автоатака остановлена.", GameState.COLOR_LOG_SYSTEM)
+			else:
+				var mob: MobEntity = _get_target_mob()
+				if mob == null:
+					mob = _find_nearest_living_mob(10.0)
+					if mob != null:
+						GameState.set_target(mob)
+				if mob == null or mob.is_dead():
+					GameState.add_combat_log("Нет подходящей цели для атаки.", GameState.COLOR_LOG_ERROR)
+					return
+				auto_attack_enabled = true
+				GameState.add_combat_log("Разбойник атакует цель: %s." % mob.mob_title, GameState.COLOR_LOG_SYSTEM)
+		2:
+			if GameState.ability_cooldowns["sinister_strike"] > 0.0:
+				GameState.add_combat_log("Умение ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			var mob: MobEntity = _get_target_mob()
+			if mob == null or mob.is_dead():
+				GameState.add_combat_log("Выберите живого врага!", GameState.COLOR_LOG_ERROR)
+				return
+			if global_position.distance_to(mob.global_position) > MELEE_RANGE + 0.4:
+				GameState.add_combat_log("Подойдите ближе к цели!", GameState.COLOR_LOG_ERROR)
+				return
+			var cost: int = 40 if GameState.is_stealthed else 35
+			if not GameState.spend_rage(cost):
+				GameState.add_combat_log("Недостаточно энергии (нужно %d)." % cost, GameState.COLOR_LOG_ERROR)
+				return
+
+			GameState.ability_cooldowns["sinister_strike"] = GameState.ability_max_cooldowns["sinister_strike"]
+			attack_anim_timer = 0.50
+			auto_attack_enabled = true
+			_face_target(mob.global_position)
+
+			if GameState.is_stealthed:
+				GameState.is_stealthed = false
+				GameState.player_stats_changed.emit()
+				var dmg_info: Dictionary = GameState.get_attack_damage(2.25, 10)
+				mob.take_damage(int(dmg_info["damage"]), self, "Внезапный удар", bool(dmg_info["is_crit"]))
+				GameState.add_combo_points(2, mob)
+				_spawn_ring_fx(mob.global_position + Vector3(0, 0.3, 0), Color(0.9, 0.25, 0.25), 0.2, 1.8, 0.3)
+			else:
+				var dmg_info: Dictionary = GameState.get_attack_damage(1.35, 5)
+				mob.take_damage(int(dmg_info["damage"]), self, "Коварный удар", bool(dmg_info["is_crit"]))
+				GameState.add_combo_points(1, mob)
+			GameState.touch_combat()
+		3:
+			if GameState.ability_cooldowns["eviscerate"] > 0.0:
+				GameState.add_combat_log("«Потрошение» ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			var mob: MobEntity = _get_target_mob()
+			if mob == null or mob.is_dead():
+				GameState.add_combat_log("Выберите живого врага!", GameState.COLOR_LOG_ERROR)
+				return
+			if global_position.distance_to(mob.global_position) > MELEE_RANGE + 0.4:
+				GameState.add_combat_log("Подойдите ближе к цели!", GameState.COLOR_LOG_ERROR)
+				return
+			if GameState.combo_target != mob or GameState.combo_points <= 0:
+				GameState.add_combat_log("Нужно хотя бы 1 очко серии (используйте Коварный удар).", GameState.COLOR_LOG_ERROR)
+				return
+			if not GameState.spend_rage(30):
+				GameState.add_combat_log("Недостаточно энергии (нужно 30).", GameState.COLOR_LOG_ERROR)
+				return
+
+			GameState.ability_cooldowns["eviscerate"] = GameState.ability_max_cooldowns["eviscerate"]
+			var pts: int = GameState.consume_combo_points(mob)
+			GameState.is_stealthed = false
+			attack_anim_timer = 0.55
+			auto_attack_enabled = true
+			_face_target(mob.global_position)
+			var dmg_info: Dictionary = GameState.get_attack_damage(0.95 + 0.46 * float(pts), 4 * pts)
+			mob.take_damage(int(dmg_info["damage"]), self, "Потрошение (%d★)" % pts, bool(dmg_info["is_crit"]))
+			_spawn_ring_fx(mob.global_position + Vector3(0, 0.25, 0), Color(1.0, 0.78, 0.22), 0.2, 1.9, 0.3)
+			GameState.touch_combat()
+		4:
+			if GameState.is_stealthed:
+				GameState.is_stealthed = false
+				GameState.player_stats_changed.emit()
+				GameState.add_combat_log("Вы вышли из незаметности.", GameState.COLOR_LOG_SYSTEM)
+				return
+			if GameState.in_combat:
+				GameState.add_combat_log("Нельзя уйти в незаметность в бою!", GameState.COLOR_LOG_ERROR)
+				return
+			if GameState.ability_cooldowns["stealth"] > 0.0:
+				GameState.add_combat_log("«Незаметность» ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			GameState.ability_cooldowns["stealth"] = GameState.ability_max_cooldowns["stealth"]
+			GameState.is_stealthed = true
+			auto_attack_enabled = false
+			AudioManager.play("stealth")
+			GameState.player_stats_changed.emit()
+			GameState.add_combat_log("Вы растворяетесь в тенях (уменьшен радиус аггро, [2] бьёт Внезапным ударом).", GameState.COLOR_LOG_SPELL)
+		5:
+			if GameState.ability_cooldowns["kidney_shot"] > 0.0:
+				GameState.add_combat_log("«Удар по почкам» ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			var mob: MobEntity = _get_target_mob()
+			if mob == null or mob.is_dead():
+				GameState.add_combat_log("Выберите живого врага!", GameState.COLOR_LOG_ERROR)
+				return
+			if global_position.distance_to(mob.global_position) > MELEE_RANGE + 0.4:
+				GameState.add_combat_log("Подойдите ближе к цели!", GameState.COLOR_LOG_ERROR)
+				return
+			if not GameState.spend_rage(25):
+				GameState.add_combat_log("Недостаточно энергии (нужно 25).", GameState.COLOR_LOG_ERROR)
+				return
+
+			GameState.ability_cooldowns["kidney_shot"] = GameState.ability_max_cooldowns["kidney_shot"]
+			var pts: int = GameState.consume_combo_points(mob)
+			var stun_dur: float = 2.0 + float(pts) * 0.5
+			GameState.is_stealthed = false
+			attack_anim_timer = 0.5
+			_face_target(mob.global_position)
+			mob.apply_stun(stun_dur)
+			_spawn_ring_fx(mob.global_position + Vector3(0, 0.25, 0), Color(0.9, 0.85, 0.25), 0.2, 1.5, 0.3)
+			GameState.add_combat_log("«Удар по почкам» оглушает цель %s на %.1f сек!" % [mob.mob_title, stun_dur], GameState.COLOR_LOG_SPELL)
+			GameState.touch_combat()
+
+
 func trigger_ability(slot: int) -> void:
 	if GameState.is_dead:
 		GameState.add_combat_log("Вы мертвы и не можете применять способности.", GameState.COLOR_LOG_ERROR)
 		return
 	if GameState.player_class == "mage":
 		_trigger_mage_ability(slot)
+		return
+	if GameState.player_class == "rogue":
+		_trigger_rogue_ability(slot)
 		return
 
 	match slot:
@@ -641,6 +796,7 @@ func trigger_ability(slot: int) -> void:
 			charge_target = mob
 			charge_timeout = 1.4
 			auto_attack_enabled = true
+			AudioManager.play("charge")
 			_spawn_ring_fx(global_position + Vector3(0, 0.15, 0), Color(0.95, 0.55, 0.2), 0.3, 1.8, 0.35)
 			GameState.add_combat_log("Вы совершаете «Рывок» к цели %s (+20 Ярости)!" % mob.mob_title, GameState.COLOR_LOG_SPELL)
 
@@ -710,7 +866,8 @@ func trigger_ability(slot: int) -> void:
 func get_swing_progress() -> float:
 	if not auto_attack_enabled:
 		return 0.0
-	return clampf(1.0 - (swing_timer / (WAND_INTERVAL if GameState.player_class == "mage" else SWING_INTERVAL)), 0.0, 1.0)
+	var iv: float = WAND_INTERVAL if GameState.player_class == "mage" else (DAGGER_INTERVAL if GameState.player_class == "rogue" else SWING_INTERVAL)
+	return clampf(1.0 - (swing_timer / iv), 0.0, 1.0)
 
 
 func _get_target_mob() -> MobEntity:
@@ -794,6 +951,15 @@ func _try_click_world(screen_pos: Vector2, is_right_click: bool) -> void:
 				npc.interact()
 			else:
 				GameState.add_combat_log("Подойдите ближе к %s, чтобы поговорить." % npc.npc_name, GameState.COLOR_LOG_SYSTEM)
+	elif collider is InteractableProp:
+		var prop := collider as InteractableProp
+		GameState.set_target(prop)
+		auto_attack_enabled = false
+		if is_right_click:
+			if global_position.distance_to(prop.global_position) <= 6.8:
+				prop.interact()
+			else:
+				GameState.add_combat_log("Подойдите ближе к объекту «%s»." % prop.prop_title, GameState.COLOR_LOG_SYSTEM)
 	elif collider is MobEntity:
 		var mob := collider as MobEntity
 		GameState.set_target(mob)
@@ -813,10 +979,15 @@ func _try_click_world(screen_pos: Vector2, is_right_click: bool) -> void:
 
 
 func _interact_nearest_or_target() -> void:
+	if GameState.is_dead:
+		return
 	var t: Node3D = GameState.current_target
 	if is_instance_valid(t):
 		if t is QuestNPC and global_position.distance_to(t.global_position) <= 7.0:
 			(t as QuestNPC).interact()
+			return
+		if t is InteractableProp and global_position.distance_to(t.global_position) <= 7.0:
+			(t as InteractableProp).interact()
 			return
 		if t is MobEntity and (t as MobEntity).is_dead() and (t as MobEntity).has_loot() and global_position.distance_to(t.global_position) <= 7.0:
 			GameState.loot_window_requested.emit(t)
@@ -827,6 +998,13 @@ func _interact_nearest_or_target() -> void:
 		if npc != null and global_position.distance_to(npc.global_position) <= 6.8:
 			GameState.set_target(npc)
 			npc.interact()
+			return
+
+	for node in get_tree().get_nodes_in_group("interactables"):
+		var prop := node as InteractableProp
+		if prop != null and prop.is_available and global_position.distance_to(prop.global_position) <= 6.8:
+			GameState.set_target(prop)
+			prop.interact()
 			return
 
 	for node in get_tree().get_nodes_in_group("mobs"):
@@ -860,6 +1038,11 @@ func _update_camera_and_ring(_delta: float) -> void:
 				if mat:
 					mat.albedo_color = Color(0.25, 0.92, 0.35, 0.85)
 					mat.emission = Color(0.25, 0.92, 0.35)
+				ring_scale = 1.0
+			elif t is InteractableProp:
+				if mat:
+					mat.albedo_color = Color(1.0, 0.85, 0.25, 0.85)
+					mat.emission = Color(1.0, 0.85, 0.25)
 				ring_scale = 1.0
 			elif t is MobEntity:
 				var mob := t as MobEntity
@@ -925,13 +1108,34 @@ func _spawn_corpse() -> void:
 	corpse_node.rotation.y = rotation.y
 	RetroModelBuilder.animate_humanoid(corpse_node, "DEAD", 0.0)
 
+	var beacon := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.08
+	cyl.bottom_radius = 0.28
+	cyl.height = 5.0
+	cyl.radial_segments = 8
+	beacon.mesh = cyl
+	var bmat := StandardMaterial3D.new()
+	bmat.albedo_color = Color(0.45, 0.82, 1.0, 0.45)
+	bmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	bmat.emission_enabled = true
+	bmat.emission = Color(0.45, 0.82, 1.0)
+	bmat.emission_energy_multiplier = 2.0
+	beacon.material_override = bmat
+	beacon.position = Vector3(0, 2.5, 0)
+	corpse_node.add_child(beacon)
 
-func _set_ghost_look(ghost: bool) -> void:
+
+func _refresh_transparency() -> void:
 	if rig_node == null:
 		return
+	if GameState.is_dead and not GameState.is_ghost:
+		rig_node.visible = false
+		return
 	rig_node.visible = true
+	var alpha: float = 0.60 if GameState.is_ghost else (0.55 if GameState.is_stealthed else 0.0)
 	for child in _collect_meshes(rig_node):
-		child.transparency = 0.6 if ghost else 0.0
+		child.transparency = alpha
 
 
 func _collect_meshes(node: Node) -> Array[MeshInstance3D]:
@@ -946,7 +1150,7 @@ func _collect_meshes(node: Node) -> Array[MeshInstance3D]:
 func _on_spirit_released() -> void:
 	global_position = spawn_position
 	velocity = Vector3.ZERO
-	_set_ghost_look(true)
+	_refresh_transparency()
 
 
 func _on_player_resurrected(at_corpse: bool) -> void:
@@ -958,7 +1162,7 @@ func _on_player_resurrected(at_corpse: bool) -> void:
 	if is_instance_valid(corpse_node):
 		corpse_node.queue_free()
 		corpse_node = null
-	_set_ghost_look(false)
+	_refresh_transparency()
 	_spawn_level_up_pillar()
 
 

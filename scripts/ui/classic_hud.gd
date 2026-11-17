@@ -1,7 +1,7 @@
 ﻿extends CanvasLayer
 
 class MinimapRadar extends Control:
-	const WORLD_SPAN := 42.0
+	const WORLD_SPAN := 50.0
 
 	func _process(_delta: float) -> void:
 		queue_redraw()
@@ -20,19 +20,31 @@ class MinimapRadar extends Control:
 			p_pos = player.global_position
 			p_yaw = player.rotation.y
 
-		# Сетка радара
+		# Озеро на востоке и дороги
+		var lake_c := center + Vector2(36.0 - p_pos.x, -20.0 - p_pos.z) * scale_px
+		draw_circle(lake_c, 13.0 * scale_px, Color(0.14, 0.38, 0.58, 0.7))
+
 		draw_circle(center, minf(size.x, size.y) * 0.46, Color(0.24, 0.34, 0.24, 0.45))
 		draw_line(Vector2(center.x, 4), Vector2(center.x, size.y - 4), Color(0.25, 0.32, 0.25, 0.35), 1.0)
 		draw_line(Vector2(4, center.y), Vector2(size.x - 4, center.y), Color(0.25, 0.32, 0.25, 0.35), 1.0)
 
-		# Дорога (-Z на север)
 		var road_x: float = center.x + (0.0 - p_pos.x) * scale_px
 		if road_x > 4 and road_x < size.x - 4:
 			draw_line(Vector2(road_x, 4), Vector2(road_x, size.y - 4), Color(0.45, 0.35, 0.22, 0.55), 5.0)
+		var cross_y: float = center.y + (-18.0 - p_pos.z) * scale_px
+		if cross_y > 4 and cross_y < size.y - 4:
+			draw_line(Vector2(4, cross_y), Vector2(size.x - 4, cross_y), Color(0.45, 0.35, 0.22, 0.45), 3.0)
 
-		# Маркер заставы и рудника
+		# Маркер заставы, лагеря Братства и входа в рудник
 		_draw_world_marker(center, p_pos, Vector3(-8.5, 0, 4.0), scale_px, Color(0.45, 0.65, 0.95), 4.0)
-		_draw_world_marker(center, p_pos, Vector3(0.0, 0, -56.0), scale_px, Color(0.65, 0.50, 0.38), 4.5)
+		_draw_world_marker(center, p_pos, Vector3(-32.0, 0, -18.0), scale_px, Color(0.75, 0.35, 0.28), 4.0)
+		_draw_world_marker(center, p_pos, Vector3(0.0, 0, -59.0), scale_px, Color(0.65, 0.50, 0.38), 4.5)
+
+		# Интерактивные объекты (ящики и сундук)
+		for node in get_tree().get_nodes_in_group("interactables"):
+			var prop := node as InteractableProp
+			if prop != null and prop.is_available:
+				_draw_world_marker(center, p_pos, prop.global_position, scale_px, Color(0.35, 0.85, 1.0), 3.0)
 
 		# Мобы
 		for node in get_tree().get_nodes_in_group("mobs"):
@@ -44,16 +56,26 @@ class MinimapRadar extends Control:
 					_draw_world_marker(center, p_pos, mob.global_position, scale_px, Color(1.0, 0.85, 0.22), 3.0)
 			else:
 				var col := Color(1.0, 0.48, 0.15) if mob.is_elite else Color(0.95, 0.22, 0.22)
-				var rad := 4.5 if mob.is_elite else 3.0
+				var rad := 4.5 if mob.is_elite else 2.8
 				_draw_world_marker(center, p_pos, mob.global_position, scale_px, col, rad)
 
 		# NPC
 		for node in get_tree().get_nodes_in_group("npcs"):
-			var npc := node as Node3D
+			var npc := node as QuestNPC
 			if npc != null:
-				_draw_world_marker(center, p_pos, npc.global_position, scale_px, Color(0.32, 0.96, 0.40), 4.2)
+				var ncol := Color(1.0, 0.85, 0.25) if npc.role == "merchant" else Color(0.32, 0.96, 0.40)
+				_draw_world_marker(center, p_pos, npc.global_position, scale_px, ncol, 4.0)
 
-		# Стрелка игрока (вперёд = -Z, в 2D на миникарте вверх = -Y)
+		# Кладбище и труп игрока
+		for sh in get_tree().get_nodes_in_group("spirit_healer"):
+			_draw_world_marker(center, p_pos, (sh as Node3D).global_position, scale_px, Color(0.55, 0.82, 1.0), 4.0)
+		if GameState.is_dead:
+			var cp := center + Vector2(GameState.corpse_position.x - p_pos.x, GameState.corpse_position.z - p_pos.z) * scale_px
+			if cp.x >= 6 and cp.x <= size.x - 6 and cp.y >= 6 and cp.y <= size.y - 6:
+				draw_line(cp + Vector2(-4, -4), cp + Vector2(4, 4), Color(0.45, 0.92, 1.0), 2.0)
+				draw_line(cp + Vector2(-4, 4), cp + Vector2(4, -4), Color(0.45, 0.92, 1.0), 2.0)
+
+		# Стрелка игрока
 		var fwd := Vector2(-sin(p_yaw), -cos(p_yaw)).normalized()
 		var right := Vector2(-fwd.y, fwd.x)
 		var tip := center + fwd * 7.5
@@ -90,8 +112,10 @@ var target_level_lbl: Label = null
 var target_hp_bar: ProgressBar = null
 var target_hp_lbl: Label = null
 var target_dist_lbl: Label = null
+var target_combo_lbl: Label = null
 
 # Правая часть
+var zone_lbl: Label = null
 var quest_tracker_lbl: RichTextLabel = null
 
 # Низ: лог, панель команд, опыт
@@ -101,6 +125,8 @@ var cast_bar: ProgressBar = null
 var xp_bar: ProgressBar = null
 var xp_lbl: Label = null
 var money_lbl: Label = null
+var talent_btn: Button = null
+var mute_btn: Button = null
 var ability_buttons: Array[Dictionary] = []
 
 # Всплывающие окна
@@ -119,6 +145,13 @@ var active_loot_mob: MobEntity = null
 var inventory_window: PanelContainer = null
 var inv_gear_lbl: RichTextLabel = null
 var inv_items_vbox: VBoxContainer = null
+
+var talent_window: PanelContainer = null
+var talent_points_lbl: Label = null
+var talent_list_vbox: VBoxContainer = null
+
+var menu_window: PanelContainer = null
+var menu_load_btn: Button = null
 
 var help_window: PanelContainer = null
 var vendor_window: PanelContainer = null
@@ -157,6 +190,8 @@ func _ready() -> void:
 	_build_quest_window()
 	_build_loot_window()
 	_build_inventory_window()
+	_build_talent_window()
+	_build_menu_window()
 	_build_help_window()
 	_build_vendor_window()
 	_build_death_banner()
@@ -167,15 +202,17 @@ func _ready() -> void:
 	GameState.floating_text_requested.connect(_on_floating_text)
 	GameState.quest_updated.connect(_refresh_quest_tracker)
 	GameState.inventory_changed.connect(_refresh_inventory_window)
+	GameState.talents_changed.connect(_refresh_talent_window)
 	GameState.loot_window_requested.connect(_open_loot_window)
 	GameState.npc_dialog_requested.connect(_open_npc_dialog)
 
 	_refresh_player_frame()
 	_refresh_quest_tracker()
 	_refresh_inventory_window()
+	_refresh_talent_window()
 
 	_on_combat_log_added("Добро пожаловать в Северноземье! Подойдите к Капитану Маркусу (!) и нажмите ПКМ или [F].", GameState.COLOR_LOG_SYSTEM)
-	_on_combat_log_added("Управление: WASD/QE — шаг, ПКМ — поворот/атака/лут, Tab — цель, 1-5 — умения, B — сумка, H — справка.", Color(0.75, 0.85, 0.95))
+	_on_combat_log_added("Управление: WASD/QE — шаг, ПКМ — поворот/атака/лут, Tab — цель, 1-5 — умения, B — сумка, T — таланты, Esc — меню.", Color(0.75, 0.85, 0.95))
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -184,6 +221,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		if key.pressed and not key.echo:
 			if key.physical_keycode == KEY_B:
 				_toggle_inventory()
+			elif key.physical_keycode == KEY_T:
+				_toggle_talents()
+			elif key.physical_keycode == KEY_M:
+				_toggle_mute()
+			elif key.physical_keycode == KEY_F5:
+				GameState.save_game()
 			elif key.physical_keycode == KEY_R:
 				if GameState.is_ghost:
 					_try_resurrect_corpse()
@@ -198,14 +241,24 @@ func _unhandled_input(event: InputEvent) -> void:
 					loot_window.visible = false
 				elif inventory_window.visible:
 					inventory_window.visible = false
+				elif talent_window.visible:
+					talent_window.visible = false
 				elif help_window.visible:
 					help_window.visible = false
+				elif menu_window.visible:
+					menu_window.visible = false
+				elif GameState.current_target == null:
+					_toggle_menu()
+				else:
+					return
+				get_viewport().set_input_as_handled()
 
 
 func _process(delta: float) -> void:
 	_update_target_frame()
 	_update_action_bar()
 	_update_death_banner()
+	_update_zone_label()
 	_update_floating_texts(delta)
 
 
@@ -271,7 +324,7 @@ func _build_player_frame() -> void:
 	portrait.add_child(port_vbox)
 
 	var icon_lbl := Label.new()
-	icon_lbl.text = "✦" if GameState.player_class == "mage" else "⚔"
+	icon_lbl.text = "✦" if GameState.player_class == "mage" else ("🗡" if GameState.player_class == "rogue" else "⚔")
 	icon_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	icon_lbl.add_theme_font_size_override("font_size", 22)
 	icon_lbl.modulate = Color(0.96, 0.85, 0.45)
@@ -353,10 +406,20 @@ func _build_target_frame() -> void:
 	target_hp_lbl = hp_dict["label"]
 	vbox.add_child(target_hp_bar)
 
+	var bot_row := HBoxContainer.new()
+	vbox.add_child(bot_row)
+
 	target_dist_lbl = Label.new()
+	target_dist_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	target_dist_lbl.add_theme_font_size_override("font_size", 12)
 	target_dist_lbl.modulate = Color(0.82, 0.84, 0.88)
-	vbox.add_child(target_dist_lbl)
+	bot_row.add_child(target_dist_lbl)
+
+	target_combo_lbl = Label.new()
+	target_combo_lbl.add_theme_font_size_override("font_size", 13)
+	target_combo_lbl.modulate = Color(1.0, 0.85, 0.22)
+	target_combo_lbl.visible = false
+	bot_row.add_child(target_combo_lbl)
 
 
 func _build_minimap_and_tracker() -> void:
@@ -378,7 +441,7 @@ func _build_minimap_and_tracker() -> void:
 	map_vbox.add_theme_constant_override("separation", 4)
 	map_panel.add_child(map_vbox)
 
-	var zone_lbl := Label.new()
+	zone_lbl = Label.new()
 	zone_lbl.text = "Северноземье — Застава"
 	zone_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	zone_lbl.add_theme_font_size_override("font_size", 13)
@@ -434,7 +497,7 @@ func _build_action_bar_and_xp() -> void:
 	var bottom_center := VBoxContainer.new()
 	bottom_center.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	bottom_center.offset_left = 435
-	bottom_center.offset_right = -180
+	bottom_center.offset_right = -215
 	bottom_center.offset_top = -126
 	bottom_center.offset_bottom = -10
 	bottom_center.alignment = BoxContainer.ALIGNMENT_END
@@ -551,8 +614,22 @@ func _build_action_bar_and_xp() -> void:
 		{"slot": 5, "key": "5", "title": "Скачок", "sub": "15 Мана", "cd_key": "blink", "rage_cost": 15,
 			"tip": "[5] Скачок (15 маны): мгновенный бросок на 11 м вперёд. КД 12 сек."},
 	]
+	var rogue_cfg: Array[Dictionary] = [
+		{"slot": 1, "key": "1", "title": "Атака", "sub": "Кинжалы", "cd_key": "", "rage_cost": 0,
+			"tip": "[1] Автоатака: быстрые удары парными кинжалами."},
+		{"slot": 2, "key": "2", "title": "Удар", "sub": "35 Эн", "cd_key": "sinister_strike", "rage_cost": 35,
+			"tip": "[2] Коварный удар (35 энергии, +1★) / Внезапный удар из Незаметности (40 энергии, 225% урона, +2★)."},
+		{"slot": 3, "key": "3", "title": "Финишер", "sub": "30 Эн", "cd_key": "eviscerate", "rage_cost": 30,
+			"tip": "[3] Потрошение (30 энергии): тратит 1-5★ серии для огромного урона."},
+		{"slot": 4, "key": "4", "title": "Скрытн.", "sub": "Стелс", "cd_key": "stealth", "rage_cost": 0,
+			"tip": "[4] Незаметность: враги замечают вас только в упор, усиливает следующий [2]."},
+		{"slot": 5, "key": "5", "title": "Стан", "sub": "25 Эн", "cd_key": "kidney_shot", "rage_cost": 25,
+			"tip": "[5] Удар по почкам (25 энергии): оглушает цель на 2 + 0.5★ сек."},
+	]
 	if GameState.player_class == "mage":
 		abilities_cfg = mage_cfg
+	elif GameState.player_class == "rogue":
+		abilities_cfg = rogue_cfg
 
 	for cfg in abilities_cfg:
 		var btn := Button.new()
@@ -585,6 +662,13 @@ func _build_action_bar_and_xp() -> void:
 		lbl_sub.modulate = Color(0.92, 0.82, 0.45)
 		btn_vbox.add_child(lbl_sub)
 
+		var cd_dim := ColorRect.new()
+		cd_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+		cd_dim.color = Color(0.03, 0.03, 0.05, 0.86)
+		cd_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cd_dim.visible = false
+		btn.add_child(cd_dim)
+
 		var cd_lbl := Label.new()
 		cd_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
 		cd_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -599,6 +683,7 @@ func _build_action_bar_and_xp() -> void:
 		btn_hbox.add_child(btn)
 		ability_buttons.append({
 			"btn": btn,
+			"cd_dim": cd_dim,
 			"cd_lbl": cd_lbl,
 			"sub_lbl": lbl_sub,
 			"cfg": cfg,
@@ -610,18 +695,18 @@ func _build_action_bar_and_xp() -> void:
 	xp_lbl = xp_dict["label"]
 	bottom_center.add_child(xp_bar)
 
-	# Справа внизу: деньги, сумка [B], справка [H]
+	# Справа внизу: деньги, сумка [B], таланты [T], справка/звук/меню
 	var br_panel := PanelContainer.new()
 	br_panel.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	br_panel.offset_left = -168
-	br_panel.offset_top = -96
+	br_panel.offset_left = -205
+	br_panel.offset_top = -132
 	br_panel.offset_right = -14
 	br_panel.offset_bottom = -12
 	br_panel.add_theme_stylebox_override("panel", _make_panel_style())
 	root_control.add_child(br_panel)
 
 	var br_vbox := VBoxContainer.new()
-	br_vbox.add_theme_constant_override("separation", 5)
+	br_vbox.add_theme_constant_override("separation", 4)
 	br_panel.add_child(br_vbox)
 
 	money_lbl = Label.new()
@@ -630,17 +715,47 @@ func _build_action_bar_and_xp() -> void:
 	money_lbl.modulate = Color(1.0, 0.88, 0.38)
 	br_vbox.add_child(money_lbl)
 
+	var row1 := HBoxContainer.new()
+	row1.add_theme_constant_override("separation", 4)
+	br_vbox.add_child(row1)
+
 	var bag_btn := Button.new()
 	bag_btn.text = "[B] Сумка"
+	bag_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bag_btn.focus_mode = Control.FOCUS_NONE
 	bag_btn.pressed.connect(_toggle_inventory)
-	br_vbox.add_child(bag_btn)
+	row1.add_child(bag_btn)
+
+	talent_btn = Button.new()
+	talent_btn.text = "[T] Таланты"
+	talent_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	talent_btn.focus_mode = Control.FOCUS_NONE
+	talent_btn.pressed.connect(_toggle_talents)
+	row1.add_child(talent_btn)
+
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", 4)
+	br_vbox.add_child(row2)
 
 	var help_btn := Button.new()
-	help_btn.text = "[H] Управление"
+	help_btn.text = "[H] Помощь"
+	help_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	help_btn.focus_mode = Control.FOCUS_NONE
 	help_btn.pressed.connect(func() -> void: help_window.visible = not help_window.visible)
-	br_vbox.add_child(help_btn)
+	row2.add_child(help_btn)
+
+	mute_btn = Button.new()
+	mute_btn.text = "Звук: Вкл"
+	mute_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mute_btn.focus_mode = Control.FOCUS_NONE
+	mute_btn.pressed.connect(_toggle_mute)
+	row2.add_child(mute_btn)
+
+	var menu_btn := Button.new()
+	menu_btn.text = "[Esc] Меню / Сохранить"
+	menu_btn.focus_mode = Control.FOCUS_NONE
+	menu_btn.pressed.connect(_toggle_menu)
+	br_vbox.add_child(menu_btn)
 
 
 func _build_quest_window() -> void:
@@ -743,9 +858,9 @@ func _build_inventory_window() -> void:
 	inventory_window = PanelContainer.new()
 	inventory_window.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	inventory_window.offset_left = -350
-	inventory_window.offset_top = -440
+	inventory_window.offset_top = -475
 	inventory_window.offset_right = -14
-	inventory_window.offset_bottom = -108
+	inventory_window.offset_bottom = -142
 	inventory_window.add_theme_stylebox_override("panel", _make_panel_style())
 	inventory_window.visible = false
 	root_control.add_child(inventory_window)
@@ -789,13 +904,106 @@ func _build_inventory_window() -> void:
 	scroll.add_child(inv_items_vbox)
 
 
+func _build_talent_window() -> void:
+	talent_window = PanelContainer.new()
+	talent_window.set_anchors_preset(Control.PRESET_CENTER)
+	talent_window.offset_left = -205
+	talent_window.offset_top = -145
+	talent_window.offset_right = 205
+	talent_window.offset_bottom = 145
+	talent_window.add_theme_stylebox_override("panel", _make_panel_style())
+	talent_window.visible = false
+	root_control.add_child(talent_window)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	talent_window.add_child(vbox)
+
+	var title_row := HBoxContainer.new()
+	vbox.add_child(title_row)
+
+	var title := Label.new()
+	title.text = "Древо талантов [T]"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.add_theme_font_size_override("font_size", 16)
+	title.modulate = Color(1.0, 0.86, 0.38)
+	title_row.add_child(title)
+
+	var close_btn := Button.new()
+	close_btn.text = "X"
+	close_btn.pressed.connect(func() -> void: talent_window.visible = false)
+	title_row.add_child(close_btn)
+
+	talent_points_lbl = Label.new()
+	talent_points_lbl.add_theme_font_size_override("font_size", 13)
+	talent_points_lbl.modulate = Color(0.55, 0.95, 0.55)
+	vbox.add_child(talent_points_lbl)
+
+	talent_list_vbox = VBoxContainer.new()
+	talent_list_vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	talent_list_vbox.add_theme_constant_override("separation", 8)
+	vbox.add_child(talent_list_vbox)
+
+
+func _build_menu_window() -> void:
+	menu_window = PanelContainer.new()
+	menu_window.set_anchors_preset(Control.PRESET_CENTER)
+	menu_window.offset_left = -150
+	menu_window.offset_top = -135
+	menu_window.offset_right = 150
+	menu_window.offset_bottom = 135
+	menu_window.add_theme_stylebox_override("panel", _make_panel_style())
+	menu_window.visible = false
+	root_control.add_child(menu_window)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	menu_window.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "Игровое меню"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 17)
+	title.modulate = Color(1.0, 0.86, 0.38)
+	vbox.add_child(title)
+
+	var save_btn := Button.new()
+	save_btn.text = "Сохранить игру [F5]"
+	save_btn.pressed.connect(func() -> void:
+		GameState.save_game()
+		menu_window.visible = false
+	)
+	vbox.add_child(save_btn)
+
+	menu_load_btn = Button.new()
+	menu_load_btn.text = "Загрузить сохранение"
+	menu_load_btn.pressed.connect(func() -> void:
+		if GameState.load_game():
+			menu_window.visible = false
+			get_tree().change_scene_to_file("res://scenes/main_world.tscn")
+	)
+	vbox.add_child(menu_load_btn)
+
+	var char_btn := Button.new()
+	char_btn.text = "Сменить класс (Главное меню)"
+	char_btn.pressed.connect(func() -> void:
+		get_tree().change_scene_to_file("res://scenes/class_select.tscn")
+	)
+	vbox.add_child(char_btn)
+
+	var resume_btn := Button.new()
+	resume_btn.text = "Вернуться в игру"
+	resume_btn.pressed.connect(func() -> void: menu_window.visible = false)
+	vbox.add_child(resume_btn)
+
+
 func _build_help_window() -> void:
 	help_window = PanelContainer.new()
 	help_window.set_anchors_preset(Control.PRESET_CENTER)
-	help_window.offset_left = -220
-	help_window.offset_top = -165
-	help_window.offset_right = 220
-	help_window.offset_bottom = 165
+	help_window.offset_left = -230
+	help_window.offset_top = -175
+	help_window.offset_right = 230
+	help_window.offset_bottom = 175
 	help_window.add_theme_stylebox_override("panel", _make_panel_style())
 	help_window.visible = false
 	root_control.add_child(help_window)
@@ -823,8 +1031,8 @@ func _build_help_window() -> void:
 		"[b]Бой и мир:[/b]\n" + \
 		"• [color=#ffd866]Tab[/color] — выбрать ближайшего врага | [color=#ffd866]ЛКМ[/color] — цель\n" + \
 		"• [color=#ffd866]ПКМ по врагу[/color] — цель + автоатака\n" + \
-		"• [color=#ffd866]ПКМ или [F][/color] по NPC / трупу — квест или добыча\n" + \
-		"• [color=#ffd866]1 — 5[/color] — способности класса | [color=#ffd866]B[/color] — Сумка"
+		"• [color=#ffd866]ПКМ или [F][/color] по NPC / ящику / трупу — действие\n" + \
+		"• [color=#ffd866]1–5[/color] — умения | [color=#ffd866]B[/color] — сумка | [color=#ffd866]T[/color] — таланты | [color=#ffd866]F5[/color] — сохр."
 	vbox.add_child(info)
 
 	var ok_btn := Button.new()
@@ -926,13 +1134,23 @@ func _refresh_player_frame() -> void:
 
 	player_rage_bar.max_value = GameState.max_rage
 	player_rage_bar.value = GameState.rage
-	player_rage_lbl.text = ("Мана: %d / %d" if GameState.resource_type == "mana" else "Ярость: %d / %d") % [GameState.rage, GameState.max_rage]
-	player_rage_bar.add_theme_stylebox_override("fill", _make_bar_style(Color(0.18, 0.40, 0.92) if GameState.resource_type == "mana" else Color(0.76, 0.14, 0.14)))
+	if GameState.resource_type == "mana":
+		player_rage_lbl.text = "Мана: %d / %d" % [GameState.rage, GameState.max_rage]
+		player_rage_bar.add_theme_stylebox_override("fill", _make_bar_style(Color(0.18, 0.40, 0.92)))
+	elif GameState.resource_type == "energy":
+		player_rage_lbl.text = "Энергия: %d / %d" % [GameState.rage, GameState.max_rage]
+		player_rage_bar.add_theme_stylebox_override("fill", _make_bar_style(Color(0.88, 0.74, 0.14)))
+	else:
+		player_rage_lbl.text = "Ярость: %d / %d" % [GameState.rage, GameState.max_rage]
+		player_rage_bar.add_theme_stylebox_override("fill", _make_bar_style(Color(0.76, 0.14, 0.14)))
 
 	combat_badge.visible = GameState.in_combat
 	if GameState.battle_shout_timer > 0.0:
 		buff_badge.visible = true
 		buff_badge.text = "Боевой крик +25%% (%dс)" % int(ceil(GameState.battle_shout_timer))
+	elif GameState.is_stealthed:
+		buff_badge.visible = true
+		buff_badge.text = "Незаметность"
 	else:
 		buff_badge.visible = false
 
@@ -942,6 +1160,13 @@ func _refresh_player_frame() -> void:
 	xp_lbl.text = "Опыт: %d / %d (%d%%) — Ур. %d" % [GameState.xp, GameState.xp_to_next, pct, GameState.level]
 
 	money_lbl.text = "Золото: %s" % GameState.format_money(GameState.money_copper)
+	if talent_btn:
+		if GameState.talent_points > 0:
+			talent_btn.text = "[T] Таланты (%d)" % GameState.talent_points
+			talent_btn.modulate = Color(1.0, 0.92, 0.35)
+		else:
+			talent_btn.text = "[T] Таланты"
+			talent_btn.modulate = Color.WHITE
 
 
 func _on_target_changed(_new_target: Node3D) -> void:
@@ -958,6 +1183,7 @@ func _update_target_frame() -> void:
 	var p: Node3D = GameState.player_node
 	var dist: float = p.global_position.distance_to(t.global_position) if is_instance_valid(p) else 0.0
 	target_dist_lbl.text = "Дистанция: %.1f м" % dist
+	target_combo_lbl.visible = false
 
 	if t is MobEntity:
 		var mob := t as MobEntity
@@ -969,16 +1195,30 @@ func _update_target_frame() -> void:
 		target_hp_bar.value = mob.hp
 		target_hp_lbl.text = "Труп" if mob.is_dead() else "%d / %d" % [mob.hp, mob.max_hp]
 		target_hp_bar.add_theme_stylebox_override("fill", _make_bar_style(Color(0.45, 0.45, 0.45) if mob.is_dead() else Color(0.76, 0.18, 0.16)))
+		if GameState.player_class == "rogue" and not mob.is_dead():
+			var pts: int = GameState.combo_points if GameState.combo_target == mob else 0
+			target_combo_lbl.visible = true
+			target_combo_lbl.text = "★".repeat(pts) + "☆".repeat(GameState.max_combo_points - pts)
 	elif t is QuestNPC:
 		var npc := t as QuestNPC
 		target_name_lbl.text = npc.npc_name
 		target_name_lbl.modulate = Color(0.40, 0.96, 0.45)
-		target_level_lbl.text = "Друг"
+		target_level_lbl.text = "Торговец" if npc.role == "merchant" else "Друг"
 		target_level_lbl.modulate = Color(0.40, 0.96, 0.45)
 		target_hp_bar.max_value = 100
 		target_hp_bar.value = 100
 		target_hp_lbl.text = "100 / 100"
 		target_hp_bar.add_theme_stylebox_override("fill", _make_bar_style(Color(0.18, 0.72, 0.24)))
+	elif t is InteractableProp:
+		var prop := t as InteractableProp
+		target_name_lbl.text = prop.prop_title
+		target_name_lbl.modulate = Color(1.0, 0.88, 0.35)
+		target_level_lbl.text = "Объект"
+		target_level_lbl.modulate = Color(1.0, 0.88, 0.35)
+		target_hp_bar.max_value = 100
+		target_hp_bar.value = 100
+		target_hp_lbl.text = "[F / ПКМ]"
+		target_hp_bar.add_theme_stylebox_override("fill", _make_bar_style(Color(0.78, 0.62, 0.20)))
 
 
 func _update_action_bar() -> void:
@@ -997,6 +1237,7 @@ func _update_action_bar() -> void:
 
 	for entry in ability_buttons:
 		var btn: Button = entry["btn"]
+		var cd_dim: ColorRect = entry["cd_dim"]
 		var cd_lbl: Label = entry["cd_lbl"]
 		var sub_lbl: Label = entry["sub_lbl"]
 		var cfg: Dictionary = entry["cfg"]
@@ -1007,20 +1248,43 @@ func _update_action_bar() -> void:
 		if slot == 1:
 			var active: bool = p != null and p.auto_attack_enabled
 			btn.modulate = Color(1.15, 1.05, 0.55) if active else Color.WHITE
-			sub_lbl.text = "АКТИВ." if active else ("Посох" if GameState.player_class == "mage" else "Меч")
+			sub_lbl.text = "АКТИВ." if active else ("Посох" if GameState.player_class == "mage" else ("Кинжалы" if GameState.player_class == "rogue" else "Меч"))
 			continue
 
 		var cd_rem: float = float(GameState.ability_cooldowns.get(cd_key, 0.0))
 		if cd_rem > 0.0:
+			cd_dim.visible = true
 			cd_lbl.visible = true
 			cd_lbl.text = "%.1f" % cd_rem
-			btn.modulate = Color(0.55, 0.55, 0.60)
+			btn.modulate = Color(0.85, 0.85, 0.90)
 		else:
+			cd_dim.visible = false
 			cd_lbl.visible = false
-			if rage_cost > 0 and GameState.rage < rage_cost:
-				btn.modulate = Color(0.65, 0.55, 0.55)
+			if GameState.player_class == "rogue" and slot == 4 and GameState.is_stealthed:
+				btn.modulate = Color(0.75, 0.95, 1.15)
+				sub_lbl.text = "АКТИВ."
 			else:
-				btn.modulate = Color.WHITE
+				sub_lbl.text = cfg["sub"]
+				if rage_cost > 0 and GameState.rage < rage_cost:
+					btn.modulate = Color(0.65, 0.55, 0.55)
+				else:
+					btn.modulate = Color.WHITE
+
+
+func _update_zone_label() -> void:
+	if zone_lbl == null or not is_instance_valid(GameState.player_node):
+		return
+	var pos: Vector3 = GameState.player_node.global_position
+	if pos.z <= -58.0:
+		zone_lbl.text = "Северный рудник (Шахта)"
+	elif pos.x <= -20.0:
+		zone_lbl.text = "Лагерь Братства"
+	elif pos.x >= 20.0:
+		zone_lbl.text = "Хрустальное озеро"
+	elif pos.z <= -6.0:
+		zone_lbl.text = "Волчий лес"
+	else:
+		zone_lbl.text = "Северноземье — Застава"
 
 
 func _update_death_banner() -> void:
@@ -1124,9 +1388,11 @@ func _update_floating_texts(delta: float) -> void:
 
 
 const VENDOR_GOODS: Array[Dictionary] = [
+	{"price": 35, "item": {"id": "tough_jerky", "name": "Дорожный паёк", "type": "food", "bonus": 45, "rarity": "common", "desc": "Вне боя восстанавливает 45% здоровья и маны", "count": 1}},
 	{"price": 40, "item": {"id": "minor_healing_potion", "name": "Малое лечебное зелье", "type": "potion", "bonus": 55, "rarity": "common", "desc": "Восстанавливает 55 ед. здоровья", "count": 1}},
+	{"price": 50, "item": {"id": "minor_mana_potion", "name": "Малое зелье маны", "type": "mana_potion", "bonus": 55, "rarity": "common", "desc": "Восстанавливает 55 ед. маны", "count": 1}},
 	{"price": 140, "item": {"id": "lesser_healing_potion", "name": "Добротное лечебное зелье", "type": "potion", "bonus": 95, "rarity": "uncommon", "desc": "Восстанавливает 95 ед. здоровья", "count": 1}},
-	{"price": 320, "item": {"id": "guard_blade", "name": "Меч стражи", "type": "weapon", "bonus": 4, "rarity": "uncommon", "desc": "+4 к урону оружия", "count": 1}},
+	{"price": 300, "item": {"id": "guard_blade", "name": "Оружие стражи", "type": "weapon", "bonus": 4, "rarity": "uncommon", "desc": "+4 к урону оружия / заклинаний", "count": 1}},
 	{"price": 280, "item": {"id": "guard_armor", "name": "Кираса стражи", "type": "armor", "bonus": 30, "rarity": "uncommon", "desc": "+30 к максимальному здоровью", "count": 1}},
 ]
 
@@ -1134,10 +1400,10 @@ const VENDOR_GOODS: Array[Dictionary] = [
 func _build_vendor_window() -> void:
 	vendor_window = PanelContainer.new()
 	vendor_window.set_anchors_preset(Control.PRESET_CENTER)
-	vendor_window.offset_left = -190
-	vendor_window.offset_top = -170
-	vendor_window.offset_right = 190
-	vendor_window.offset_bottom = 170
+	vendor_window.offset_left = -205
+	vendor_window.offset_top = -200
+	vendor_window.offset_right = 205
+	vendor_window.offset_bottom = 200
 	vendor_window.add_theme_stylebox_override("panel", _make_panel_style())
 	vendor_window.visible = false
 	root_control.add_child(vendor_window)
@@ -1241,7 +1507,7 @@ func _open_npc_dialog(npc_ref: Node3D) -> void:
 		quest_win_body.text = "Как продвигается дело с заданием «%s»?\n\nВозвращайся ко мне, как только цели будут выполнены!" % q["title"]
 	else:
 		quest_win_title.text = npc_name
-		quest_win_body.text = "Застава в безопасности благодаря твоей стали, воин!\n\nМожешь продолжать охоту на волков и кобольдов в северной долине, чтобы закалиться в боях."
+		quest_win_body.text = "Застава в безопасности благодаря твоей отваге, герой!\n\nМожешь продолжать исследовать Хрустальное озеро, Лагерь Братства и Северный рудник."
 
 	quest_window.visible = true
 
@@ -1358,8 +1624,10 @@ func _refresh_inventory_window() -> void:
 
 		var act_btn := Button.new()
 		var itype: String = String(item.get("type", "junk"))
-		if itype == "potion":
+		if itype == "potion" or itype == "mana_potion":
 			act_btn.text = "Выпить"
+		elif itype == "food":
+			act_btn.text = "Съесть"
 		elif itype == "weapon" or itype == "armor":
 			act_btn.text = "Надеть"
 		else:
@@ -1370,6 +1638,70 @@ func _refresh_inventory_window() -> void:
 			GameState.use_or_equip_item(cap_i)
 		)
 		row.add_child(act_btn)
+
+
+func _toggle_talents() -> void:
+	talent_window.visible = not talent_window.visible
+	if talent_window.visible:
+		_refresh_talent_window()
+
+
+func _refresh_talent_window() -> void:
+	if talent_points_lbl == null or talent_list_vbox == null:
+		return
+	talent_points_lbl.text = "Свободных очков талантов: %d (получаете по +1 с 2-го ур.)" % GameState.talent_points
+	for child in talent_list_vbox.get_children():
+		child.queue_free()
+
+	for t in GameState.get_class_talents():
+		var tid: String = String(t["id"])
+		var cur: int = GameState.get_talent_rank(tid)
+		var max_r: int = int(t["max"])
+
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		talent_list_vbox.add_child(row)
+
+		var info_v := VBoxContainer.new()
+		info_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(info_v)
+
+		var name_lbl := Label.new()
+		name_lbl.text = "%s (%d/%d)" % [t["name"], cur, max_r]
+		name_lbl.add_theme_font_size_override("font_size", 14)
+		name_lbl.modulate = Color(0.55, 0.95, 0.55) if cur > 0 else Color(0.95, 0.88, 0.55)
+		info_v.add_child(name_lbl)
+
+		var desc_lbl := Label.new()
+		desc_lbl.text = String(t["desc"])
+		desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		desc_lbl.add_theme_font_size_override("font_size", 11)
+		desc_lbl.modulate = Color(0.82, 0.84, 0.88)
+		info_v.add_child(desc_lbl)
+
+		var add_btn := Button.new()
+		add_btn.text = "+1"
+		add_btn.custom_minimum_size = Vector2(44, 36)
+		add_btn.disabled = GameState.talent_points <= 0 or cur >= max_r
+		add_btn.focus_mode = Control.FOCUS_NONE
+		add_btn.pressed.connect(func() -> void:
+			GameState.spend_talent_point(tid)
+		)
+		row.add_child(add_btn)
+
+
+func _toggle_menu() -> void:
+	menu_window.visible = not menu_window.visible
+	if menu_window.visible and menu_load_btn:
+		var has_sv: bool = GameState.has_save()
+		menu_load_btn.disabled = not has_sv
+		menu_load_btn.text = ("Загрузить (%s)" % GameState.get_save_summary()) if has_sv else "Загрузить (нет сохр.)"
+
+
+func _toggle_mute() -> void:
+	var m: bool = AudioManager.toggle_mute()
+	if mute_btn:
+		mute_btn.text = "Звук: Выкл" if m else "Звук: Вкл"
 
 
 func _rarity_color(rarity: String) -> Color:

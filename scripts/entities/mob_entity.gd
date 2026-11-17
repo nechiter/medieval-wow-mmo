@@ -33,6 +33,8 @@ var stun_timer: float = 0.0
 var slow_timer: float = 0.0
 var attack_cooldown: float = 0.0
 var attack_anim_timer: float = 0.0
+var enemy_cast_timer: float = 0.0
+var is_caster: bool = false
 var respawn_timer: float = 0.0
 var anim_time: float = 0.0
 var has_shouted_aggro: bool = false
@@ -80,6 +82,7 @@ func configure(cfg: Dictionary) -> void:
 	attack_interval = float(cfg.get("attack_interval", attack_interval))
 	move_speed = float(cfg.get("move_speed", move_speed))
 	xp_reward = int(cfg.get("xp_reward", xp_reward))
+	is_caster = bool(cfg.get("is_caster", is_caster))
 
 
 func _build_collision() -> void:
@@ -120,6 +123,46 @@ func _build_visuals() -> void:
 			"cape_color": Color(0.48, 0.08, 0.08),
 			"eye_color": Color(1.0, 0.25, 0.15),
 			"weapon_type": "greataxe",
+			"has_cape": true,
+			"has_candle": true,
+		})
+	elif mob_id == "bandit":
+		rig_node = RetroModelBuilder.build_humanoid({
+			"scale": 1.0,
+			"archetype": "bandit",
+			"armor_color": Color(0.24, 0.20, 0.18),
+			"accent_color": Color(0.55, 0.45, 0.25),
+			"skin_color": Color(0.86, 0.68, 0.54),
+			"pants_color": Color(0.18, 0.16, 0.15),
+			"cape_color": Color(0.68, 0.12, 0.12),
+			"eye_color": Color(0.16, 0.16, 0.20),
+			"weapon_type": "shortsword",
+			"has_cape": false,
+		})
+	elif mob_id == "murloc":
+		rig_node = RetroModelBuilder.build_humanoid({
+			"scale": 0.90,
+			"archetype": "murloc",
+			"armor_color": Color(0.18, 0.48, 0.40),
+			"accent_color": Color(0.88, 0.56, 0.18),
+			"skin_color": Color(0.24, 0.62, 0.46),
+			"pants_color": Color(0.15, 0.36, 0.30),
+			"cape_color": Color(0.24, 0.62, 0.46),
+			"eye_color": Color(1.0, 0.88, 0.22),
+			"weapon_type": "spear",
+			"has_cape": false,
+		})
+	elif mob_id == "kobold_geomancer":
+		rig_node = RetroModelBuilder.build_humanoid({
+			"scale": 0.88,
+			"archetype": "kobold",
+			"armor_color": Color(0.42, 0.16, 0.14),
+			"accent_color": Color(0.82, 0.52, 0.18),
+			"skin_color": Color(0.58, 0.46, 0.38),
+			"pants_color": Color(0.24, 0.16, 0.14),
+			"cape_color": Color(0.45, 0.12, 0.10),
+			"eye_color": Color(1.0, 0.52, 0.14),
+			"weapon_type": "fire_staff",
 			"has_cape": true,
 			"has_candle": true,
 		})
@@ -245,7 +288,8 @@ func _physics_process(delta: float) -> void:
 func _process_idle(delta: float, player: Node3D, player_alive: bool) -> void:
 	if player_alive:
 		var dist_to_player: float = global_position.distance_to(player.global_position)
-		if dist_to_player <= aggro_radius:
+		var eff_aggro: float = 2.4 if GameState.is_stealthed else aggro_radius
+		if dist_to_player <= eff_aggro:
 			_enter_aggro()
 			return
 
@@ -310,6 +354,9 @@ func _process_attack(delta: float, player: Node3D, player_alive: bool) -> void:
 	to_player.y = 0.0
 	var dist: float = to_player.length()
 	if dist > attack_range * 1.15:
+		enemy_cast_timer = 0.0
+		if stun_indicator and state != State.STUNNED:
+			stun_indicator.visible = false
 		state = State.CHASE
 		return
 
@@ -318,11 +365,55 @@ func _process_attack(delta: float, player: Node3D, player_alive: bool) -> void:
 	if dist > 0.05:
 		_face_direction(to_player.normalized(), delta)
 
-	if attack_cooldown <= 0.0:
+	if is_caster:
+		if enemy_cast_timer > 0.0:
+			enemy_cast_timer -= delta
+			if stun_indicator:
+				stun_indicator.visible = true
+				stun_indicator.modulate = Color(1.0, 0.52, 0.18)
+				stun_indicator.text = "Читает: Огн. стрела (%.1f)" % maxf(0.0, enemy_cast_timer)
+			if enemy_cast_timer <= 0.0:
+				if stun_indicator:
+					stun_indicator.visible = false
+				attack_cooldown = attack_interval
+				attack_anim_timer = 0.55
+				_fire_enemy_bolt(player)
+		elif attack_cooldown <= 0.0:
+			enemy_cast_timer = 1.4
+	elif attack_cooldown <= 0.0:
 		attack_cooldown = attack_interval
 		attack_anim_timer = 0.55
 		var dmg: int = randi_range(damage_min, damage_max)
 		GameState.damage_player(dmg, mob_title)
+
+
+func _fire_enemy_bolt(target: Node3D) -> void:
+	if not is_instance_valid(target):
+		return
+	var proj := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.22
+	sphere.height = 0.44
+	proj.mesh = sphere
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.42, 0.12)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.42, 0.12)
+	mat.emission_energy_multiplier = 2.8
+	proj.material_override = mat
+	get_parent().add_child(proj)
+	var start: Vector3 = global_position + Vector3(0, 1.4, 0)
+	proj.global_position = start
+	var end: Vector3 = target.global_position + Vector3(0, 1.1, 0)
+	var travel: float = maxf(0.12, start.distance_to(end) / 18.0)
+	var dmg: int = randi_range(damage_min, damage_max)
+	var tw := proj.create_tween()
+	tw.tween_property(proj, "global_position", end, travel)
+	tw.tween_callback(func() -> void:
+		if not GameState.is_dead:
+			GameState.damage_player(dmg, "%s (Огненная стрела)" % mob_title)
+		proj.queue_free()
+	)
 
 
 func _process_evade_return(delta: float) -> void:
@@ -351,6 +442,12 @@ func _enter_aggro() -> void:
 		has_shouted_aggro = true
 		if mob_id == "kobold":
 			GameState.add_combat_log("%s кричит: «Ты не забрать свеча!»" % mob_title, Color(1.0, 0.58, 0.35))
+		elif mob_id == "kobold_geomancer":
+			GameState.add_combat_log("%s шипит: «Огонь сожжёт тебя! Свеча моя!»" % mob_title, Color(1.0, 0.50, 0.22))
+		elif mob_id == "bandit":
+			GameState.add_combat_log("%s выкрикивает: «За Братство! Кошелёк или жизнь!»" % mob_title, Color(0.96, 0.45, 0.38))
+		elif mob_id == "murloc":
+			GameState.add_combat_log("%s булькающе вопит: «Мрррглглгл!»" % mob_title, Color(0.45, 0.92, 0.72))
 		elif mob_id == "boss_crusher":
 			GameState.add_combat_log("%s ревёт: «Ты не забрать БОЛЬШАЯ свеча! РАЗДАВЛЮ!»" % mob_title, Color(1.0, 0.35, 0.25))
 
@@ -377,6 +474,7 @@ func take_damage(amount: int, _attacker: Node3D, ability_name: String = "Ата�
 		return
 
 	hp = maxi(0, hp - amount)
+	AudioManager.play("crit" if is_crit else "hit")
 	var text_col: Color = Color(1.0, 0.88, 0.22) if (is_crit or ability_name != "Автоатака") else Color.WHITE
 	var text_str: String = "%d!" % amount if is_crit else "%d" % amount
 	var label_y: float = 2.4 if mob_id == "boss_crusher" else 1.8
@@ -397,9 +495,12 @@ func apply_stun(duration: float) -> void:
 	if state == State.DEAD:
 		return
 	state = State.STUNNED
+	enemy_cast_timer = 0.0
 	stun_timer = maxf(stun_timer, duration)
 	if stun_indicator:
 		stun_indicator.visible = true
+		stun_indicator.modulate = Color(1.0, 0.92, 0.25)
+		stun_indicator.text = "* ОГЛУШЁН *"
 	GameState.floating_text_requested.emit(global_position + Vector3(0, 2.3, 0), "ОГЛУШЕНИЕ", Color(1.0, 0.90, 0.25), false)
 
 
@@ -457,8 +558,8 @@ func _generate_loot() -> void:
 				"desc": "Восстанавливает 55 ед. здоровья",
 				"count": 1,
 			})
-	elif mob_id == "kobold":
-		loot_copper = randi_range(14, 28)
+	elif mob_id == "kobold" or mob_id == "kobold_geomancer":
+		loot_copper = randi_range(16, 32)
 		if randf() < 0.75:
 			loot_items.append({
 				"id": "melted_candle",
@@ -469,7 +570,61 @@ func _generate_loot() -> void:
 				"desc": "Трофей (продаётся скупщику за 18м)",
 				"count": 1,
 			})
-		if randf() < 0.42:
+		if mob_id == "kobold_geomancer" and randf() < 0.55:
+			loot_items.append({
+				"id": "minor_mana_potion",
+				"name": "Малое зелье маны",
+				"type": "mana_potion",
+				"bonus": 55,
+				"rarity": "common",
+				"desc": "Восстанавливает 55 ед. маны",
+				"count": 1,
+			})
+		elif randf() < 0.42:
+			loot_items.append({
+				"id": "minor_healing_potion",
+				"name": "Малое лечебное зелье",
+				"type": "potion",
+				"bonus": 55,
+				"rarity": "common",
+				"desc": "Восстанавливает 55 ед. здоровья",
+				"count": 1,
+			})
+	elif mob_id == "bandit":
+		loot_copper = randi_range(20, 38)
+		if randf() < 0.75:
+			loot_items.append({
+				"id": "red_bandana",
+				"name": "Красная повязка Братства",
+				"type": "junk",
+				"value": 24,
+				"rarity": "common",
+				"desc": "Трофей (продаётся скупщику за 24м)",
+				"count": 1,
+			})
+		if randf() < 0.5:
+			loot_items.append({
+				"id": "tough_jerky",
+				"name": "Дорожный паёк",
+				"type": "food",
+				"bonus": 45,
+				"rarity": "common",
+				"desc": "Вне боя восстанавливает 45% здоровья и маны",
+				"count": 1,
+			})
+	elif mob_id == "murloc":
+		loot_copper = randi_range(18, 34)
+		if randf() < 0.72:
+			loot_items.append({
+				"id": "murloc_fin",
+				"name": "Чешуйчатый плавник",
+				"type": "junk",
+				"value": 22,
+				"rarity": "common",
+				"desc": "Трофей (продаётся скупщику за 22м)",
+				"count": 1,
+			})
+		if randf() < 0.35:
 			loot_items.append({
 				"id": "minor_healing_potion",
 				"name": "Малое лечебное зелье",
@@ -480,14 +635,14 @@ func _generate_loot() -> void:
 				"count": 1,
 			})
 	elif mob_id == "boss_crusher":
-		loot_copper = randi_range(85, 130)
+		loot_copper = randi_range(95, 150)
 		loot_items.append({
 			"id": "crusher_axe_trophy",
-			"name": "Тяжёлый топор Дробителя",
+			"name": "Реликвия Дробителя",
 			"type": "weapon",
 			"bonus": 9,
 			"rarity": "rare",
-			"desc": "+9 к урону оружия",
+			"desc": "+9 к урону оружия / заклинаний",
 			"count": 1,
 		})
 		loot_items.append({
@@ -547,4 +702,5 @@ func _update_animation() -> void:
 	if mob_id == "wolf":
 		RetroModelBuilder.animate_wolf(rig_node, anim_state, anim_time, atk_prog)
 	else:
-		RetroModelBuilder.animate_humanoid(rig_node, anim_state, anim_time, atk_prog, 0.0, -0.26)
+		var hunch: float = -0.30 if mob_id == "murloc" else (0.0 if mob_id == "bandit" else -0.26)
+		RetroModelBuilder.animate_humanoid(rig_node, anim_state, anim_time, atk_prog, 0.0, hunch)

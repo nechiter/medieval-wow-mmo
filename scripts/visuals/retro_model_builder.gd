@@ -60,6 +60,7 @@ static func build_humanoid(config: Dictionary) -> Node3D:
 	var has_cape: bool = bool(config.get("has_cape", true))
 	var has_candle: bool = bool(config.get("has_candle", false))
 	var has_shield: bool = bool(config.get("has_shield", false))
+	var has_offhand_dagger: bool = bool(config.get("has_offhand_dagger", false))
 
 	var mat_armor := make_retro_material(armor_color, 0.65, 0.35)
 	var mat_accent := make_retro_material(accent_color, 0.48, 0.55)
@@ -146,6 +147,19 @@ static func build_humanoid(config: Dictionary) -> Node3D:
 		head_pivot.add_child(_make_box_mesh(Vector3(0.52, 0.05, 0.52), mat_hat, Vector3(0, 0.33, 0), Vector3.ZERO, "HatBrim"))
 		head_pivot.add_child(_make_prism_or_cyl(0.02, 0.19, 0.46, 6, mat_hat, Vector3(0, 0.58, 0), Vector3(-6, 0, 0), "HatCone"))
 		head_pivot.add_child(_make_box_mesh(Vector3(0.38, 0.12, 0.36), mat_hair, Vector3(0, 0.12, 0.10), Vector3.ZERO, "HairBack"))
+	elif archetype == "rogue" or archetype == "bandit":
+		# Капюшон и маска разбойника / Братства Справедливости
+		var mat_hood := make_retro_material(armor_color.darkened(0.18), 0.90, 0.02)
+		var mat_mask := make_retro_material(cape_color, 0.90, 0.02)
+		head_pivot.add_child(_make_box_mesh(Vector3(0.39, 0.18, 0.40), mat_hood, Vector3(0, 0.31, 0.02), Vector3.ZERO, "HoodTop"))
+		head_pivot.add_child(_make_box_mesh(Vector3(0.38, 0.30, 0.18), mat_hood, Vector3(0, 0.17, 0.12), Vector3.ZERO, "HoodBack"))
+		head_pivot.add_child(_make_box_mesh(Vector3(0.36, 0.15, 0.10), mat_mask, Vector3(0, 0.09, -0.15), Vector3.ZERO, "FaceMask"))
+	elif archetype == "murloc":
+		# Голова мурлока: широкая морда, выпуклые глаза и спинные плавники
+		var mat_fin := make_retro_material(accent_color, 0.72, 0.05)
+		head_pivot.add_child(_make_box_mesh(Vector3(0.42, 0.22, 0.38), mat_skin, Vector3(0, 0.14, -0.06), Vector3.ZERO, "MurlocJaw"))
+		head_pivot.add_child(_make_box_mesh(Vector3(0.06, 0.28, 0.26), mat_fin, Vector3(0, 0.38, 0.08), Vector3(-12, 0, 0), "HeadFin"))
+		torso_pivot.add_child(_make_box_mesh(Vector3(0.06, 0.44, 0.20), mat_fin, Vector3(0, 0.38, 0.22), Vector3(-16, 0, 0), "BackFin"))
 	elif archetype == "guard":
 		# Шлем стражника с гребнем
 		head_pivot.add_child(_make_box_mesh(Vector3(0.38, 0.18, 0.38), mat_steel, Vector3(0, 0.31, 0), Vector3.ZERO, "HelmTop"))
@@ -178,6 +192,11 @@ static func build_humanoid(config: Dictionary) -> Node3D:
 		arm_l.add_child(shield_grp)
 		shield_grp.add_child(_make_box_mesh(Vector3(0.06, 0.58, 0.44), mat_armor, Vector3.ZERO, Vector3.ZERO, "ShieldBody"))
 		shield_grp.add_child(_make_box_mesh(Vector3(0.08, 0.24, 0.16), mat_accent, Vector3(-0.01, 0.0, 0.0), Vector3.ZERO, "ShieldBoss"))
+	elif has_offhand_dagger:
+		var off_dagger := _build_weapon("dagger", mat_steel, mat_accent, mat_wood)
+		off_dagger.name = "OffhandDagger"
+		off_dagger.position = Vector3(-0.04, -0.52, -0.06)
+		arm_l.add_child(off_dagger)
 
 	# Правая рука + наплечник + оружие
 	var arm_r := Node3D.new()
@@ -204,6 +223,17 @@ static func _build_weapon(weapon_type: String, mat_steel: Material, mat_accent: 
 		w.add_child(_make_box_mesh(Vector3(0.06, 0.06, 1.5), mat_wood, Vector3(0, 0, -0.55), Vector3.ZERO, "Shaft"))
 		w.add_child(_make_box_mesh(Vector3(0.16, 0.16, 0.16), mat_crystal, Vector3(0, 0, -1.38), Vector3(45, 45, 0), "Crystal"))
 		w.add_child(_make_box_mesh(Vector3(0.12, 0.12, 0.05), mat_accent, Vector3(0, 0, -1.26), Vector3.ZERO, "Holder"))
+	elif weapon_type == "fire_staff":
+		var mat_ember := make_retro_material(Color(1.0, 0.45, 0.12), 0.2, 0.0, Color(1.0, 0.42, 0.08), 2.8)
+		w.add_child(_make_box_mesh(Vector3(0.06, 0.06, 1.35), mat_wood, Vector3(0, 0, -0.50), Vector3.ZERO, "Shaft"))
+		w.add_child(_make_box_mesh(Vector3(0.18, 0.18, 0.18), mat_ember, Vector3(0, 0, -1.24), Vector3(30, 30, 0), "Orb"))
+	elif weapon_type == "dagger":
+		w.add_child(_make_box_mesh(Vector3(0.04, 0.04, 0.18), mat_wood, Vector3(0, 0, 0.02), Vector3.ZERO, "Grip"))
+		w.add_child(_make_box_mesh(Vector3(0.16, 0.04, 0.04), mat_accent, Vector3(0, 0, -0.08), Vector3.ZERO, "Guard"))
+		w.add_child(_make_box_mesh(Vector3(0.06, 0.025, 0.42), mat_steel, Vector3(0, 0, -0.30), Vector3.ZERO, "Blade"))
+	elif weapon_type == "spear":
+		w.add_child(_make_box_mesh(Vector3(0.05, 0.05, 1.45), mat_wood, Vector3(0, 0, -0.52), Vector3.ZERO, "Shaft"))
+		w.add_child(_make_box_mesh(Vector3(0.10, 0.03, 0.30), mat_steel, Vector3(0, 0, -1.32), Vector3.ZERO, "SpearTip"))
 	elif weapon_type == "pickaxe":
 		# Кирка кобольда
 		w.add_child(_make_box_mesh(Vector3(0.06, 0.06, 0.78), mat_wood, Vector3(0, 0, -0.28), Vector3.ZERO, "Handle"))
