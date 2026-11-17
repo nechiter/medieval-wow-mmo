@@ -1,4 +1,4 @@
-extends CanvasLayer
+﻿extends CanvasLayer
 
 class MinimapRadar extends Control:
 	const WORLD_SPAN := 42.0
@@ -97,6 +97,7 @@ var quest_tracker_lbl: RichTextLabel = null
 # Низ: лог, панель команд, опыт
 var combat_log_rtl: RichTextLabel = null
 var swing_bar: ProgressBar = null
+var cast_bar: ProgressBar = null
 var xp_bar: ProgressBar = null
 var xp_lbl: Label = null
 var money_lbl: Label = null
@@ -120,6 +121,8 @@ var inv_gear_lbl: RichTextLabel = null
 var inv_items_vbox: VBoxContainer = null
 
 var help_window: PanelContainer = null
+var vendor_window: PanelContainer = null
+var vendor_money_lbl: Label = null
 var death_banner: PanelContainer = null
 var death_lbl: Label = null
 var release_btn: Button = null
@@ -155,6 +158,7 @@ func _ready() -> void:
 	_build_loot_window()
 	_build_inventory_window()
 	_build_help_window()
+	_build_vendor_window()
 	_build_death_banner()
 
 	GameState.player_stats_changed.connect(_refresh_player_frame)
@@ -188,6 +192,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif key.physical_keycode == KEY_ESCAPE:
 				if quest_window.visible:
 					quest_window.visible = false
+				elif vendor_window.visible:
+					vendor_window.visible = false
 				elif loot_window.visible:
 					loot_window.visible = false
 				elif inventory_window.visible:
@@ -265,7 +271,7 @@ func _build_player_frame() -> void:
 	portrait.add_child(port_vbox)
 
 	var icon_lbl := Label.new()
-	icon_lbl.text = "⚔"
+	icon_lbl.text = "✦" if GameState.player_class == "mage" else "⚔"
 	icon_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	icon_lbl.add_theme_font_size_override("font_size", 22)
 	icon_lbl.modulate = Color(0.96, 0.85, 0.45)
@@ -450,6 +456,28 @@ func _build_action_bar_and_xp() -> void:
 	swing_bar.add_theme_stylebox_override("fill", _make_bar_style(Color(0.95, 0.86, 0.42)))
 	swing_wrap.add_child(swing_bar)
 
+	var cast_wrap := CenterContainer.new()
+	cast_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bottom_center.add_child(cast_wrap)
+	bottom_center.move_child(cast_wrap, 0)
+	cast_bar = ProgressBar.new()
+	cast_bar.custom_minimum_size = Vector2(300, 16)
+	cast_bar.show_percentage = false
+	cast_bar.max_value = 1.0
+	cast_bar.visible = false
+	cast_bar.add_theme_stylebox_override("background", _make_bar_style(Color(0.05, 0.05, 0.08, 0.9)))
+	cast_bar.add_theme_stylebox_override("fill", _make_bar_style(Color(0.95, 0.72, 0.2)))
+	var cast_lbl := Label.new()
+	cast_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	cast_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cast_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	cast_lbl.add_theme_font_size_override("font_size", 11)
+	cast_lbl.add_theme_color_override("font_outline_color", Color.BLACK)
+	cast_lbl.add_theme_constant_override("outline_size", 3)
+	cast_bar.add_child(cast_lbl)
+	cast_bar.set_meta("label", cast_lbl)
+	cast_wrap.add_child(cast_bar)
+
 	# Панель способностей
 	var bar_center := CenterContainer.new()
 	bar_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -510,6 +538,21 @@ func _build_action_bar_and_xp() -> void:
 			"tip": "[5] Боевой крик: +25% к урону на 30 сек и лечение на 35% HP. КД 15 сек.",
 		},
 	]
+
+	var mage_cfg: Array[Dictionary] = [
+		{"slot": 1, "key": "1", "title": "Атака", "sub": "Посох", "cd_key": "", "rage_cost": 0,
+			"tip": "[1] Атака посохом: дальний автовыстрел (22 м), мана не тратится."},
+		{"slot": 2, "key": "2", "title": "Шар", "sub": "30 Мана", "cd_key": "fireball", "rage_cost": 30,
+			"tip": "[2] Огненный шар (30 маны, каст 1.6 сек): мощный урон на дистанции до 30 м."},
+		{"slot": 3, "key": "3", "title": "Стрела", "sub": "20 Мана", "cd_key": "frostbolt", "rage_cost": 20,
+			"tip": "[3] Ледяная стрела (20 маны, каст 1.2 сек): урон и замедление цели на 4 сек."},
+		{"slot": 4, "key": "4", "title": "Кольцо", "sub": "35 Мана", "cd_key": "frost_nova", "rage_cost": 35,
+			"tip": "[4] Кольцо льда (35 маны): урон и заморозка всех врагов в радиусе 6 м на 2.5 сек. КД 10 сек."},
+		{"slot": 5, "key": "5", "title": "Скачок", "sub": "15 Мана", "cd_key": "blink", "rage_cost": 15,
+			"tip": "[5] Скачок (15 маны): мгновенный бросок на 11 м вперёд. КД 12 сек."},
+	]
+	if GameState.player_class == "mage":
+		abilities_cfg = mage_cfg
 
 	for cfg in abilities_cfg:
 		var btn := Button.new()
@@ -781,7 +824,7 @@ func _build_help_window() -> void:
 		"• [color=#ffd866]Tab[/color] — выбрать ближайшего врага | [color=#ffd866]ЛКМ[/color] — цель\n" + \
 		"• [color=#ffd866]ПКМ по врагу[/color] — цель + автоатака\n" + \
 		"• [color=#ffd866]ПКМ или [F][/color] по NPC / трупу — квест или добыча\n" + \
-		"• [color=#ffd866]1 — 5[/color] — способности Воина | [color=#ffd866]B[/color] — Сумка"
+		"• [color=#ffd866]1 — 5[/color] — способности класса | [color=#ffd866]B[/color] — Сумка"
 	vbox.add_child(info)
 
 	var ok_btn := Button.new()
@@ -883,7 +926,8 @@ func _refresh_player_frame() -> void:
 
 	player_rage_bar.max_value = GameState.max_rage
 	player_rage_bar.value = GameState.rage
-	player_rage_lbl.text = "Ярость: %d / %d" % [GameState.rage, GameState.max_rage]
+	player_rage_lbl.text = ("Мана: %d / %d" if GameState.resource_type == "mana" else "Ярость: %d / %d") % [GameState.rage, GameState.max_rage]
+	player_rage_bar.add_theme_stylebox_override("fill", _make_bar_style(Color(0.18, 0.40, 0.92) if GameState.resource_type == "mana" else Color(0.76, 0.14, 0.14)))
 
 	combat_badge.visible = GameState.in_combat
 	if GameState.battle_shout_timer > 0.0:
@@ -942,8 +986,14 @@ func _update_action_bar() -> void:
 	if p != null:
 		swing_bar.visible = p.auto_attack_enabled
 		swing_bar.value = p.get_swing_progress()
+		cast_bar.visible = p.casting_slot != 0
+		if cast_bar.visible:
+			cast_bar.value = p.get_cast_progress()
+			var spell_name: String = "Огненный шар" if p.casting_slot == 2 else "Ледяная стрела"
+			(cast_bar.get_meta("label") as Label).text = spell_name
 	else:
 		swing_bar.visible = false
+		cast_bar.visible = false
 
 	for entry in ability_buttons:
 		var btn: Button = entry["btn"]
@@ -957,7 +1007,7 @@ func _update_action_bar() -> void:
 		if slot == 1:
 			var active: bool = p != null and p.auto_attack_enabled
 			btn.modulate = Color(1.15, 1.05, 0.55) if active else Color.WHITE
-			sub_lbl.text = "АКТИВ." if active else "Меч"
+			sub_lbl.text = "АКТИВ." if active else ("Посох" if GameState.player_class == "mage" else "Меч")
 			continue
 
 		var cd_rem: float = float(GameState.ability_cooldowns.get(cd_key, 0.0))
@@ -1073,7 +1123,82 @@ func _update_floating_texts(delta: float) -> void:
 			lbl.modulate.a = alpha
 
 
+const VENDOR_GOODS: Array[Dictionary] = [
+	{"price": 40, "item": {"id": "minor_healing_potion", "name": "Малое лечебное зелье", "type": "potion", "bonus": 55, "rarity": "common", "desc": "Восстанавливает 55 ед. здоровья", "count": 1}},
+	{"price": 140, "item": {"id": "lesser_healing_potion", "name": "Добротное лечебное зелье", "type": "potion", "bonus": 95, "rarity": "uncommon", "desc": "Восстанавливает 95 ед. здоровья", "count": 1}},
+	{"price": 320, "item": {"id": "guard_blade", "name": "Меч стражи", "type": "weapon", "bonus": 4, "rarity": "uncommon", "desc": "+4 к урону оружия", "count": 1}},
+	{"price": 280, "item": {"id": "guard_armor", "name": "Кираса стражи", "type": "armor", "bonus": 30, "rarity": "uncommon", "desc": "+30 к максимальному здоровью", "count": 1}},
+]
+
+
+func _build_vendor_window() -> void:
+	vendor_window = PanelContainer.new()
+	vendor_window.set_anchors_preset(Control.PRESET_CENTER)
+	vendor_window.offset_left = -190
+	vendor_window.offset_top = -170
+	vendor_window.offset_right = 190
+	vendor_window.offset_bottom = 170
+	vendor_window.add_theme_stylebox_override("panel", _make_panel_style())
+	vendor_window.visible = false
+	root_control.add_child(vendor_window)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 6)
+	vendor_window.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "Торговец Элрик"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 16)
+	title.modulate = Color(1.0, 0.86, 0.38)
+	vbox.add_child(title)
+
+	vendor_money_lbl = Label.new()
+	vendor_money_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vendor_money_lbl.modulate = Color(1.0, 0.88, 0.38)
+	vbox.add_child(vendor_money_lbl)
+
+	var sell_btn := Button.new()
+	sell_btn.text = "Продать все трофеи"
+	sell_btn.focus_mode = Control.FOCUS_NONE
+	sell_btn.pressed.connect(func() -> void:
+		GameState.sell_all_junk()
+		_refresh_vendor_money()
+	)
+	vbox.add_child(sell_btn)
+
+	vbox.add_child(HSeparator.new())
+
+	for good in VENDOR_GOODS:
+		var item: Dictionary = good["item"]
+		var price: int = int(good["price"])
+		var btn := Button.new()
+		btn.text = "%s — %s" % [item["name"], GameState.format_money(price)]
+		btn.tooltip_text = String(item.get("desc", ""))
+		btn.modulate = _rarity_color(String(item.get("rarity", "common")))
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.pressed.connect(func() -> void:
+			GameState.buy_item(item, price)
+			_refresh_vendor_money()
+		)
+		vbox.add_child(btn)
+
+	var close_btn := Button.new()
+	close_btn.text = "Закрыть"
+	close_btn.pressed.connect(func() -> void: vendor_window.visible = false)
+	vbox.add_child(close_btn)
+
+
+func _refresh_vendor_money() -> void:
+	if vendor_money_lbl:
+		vendor_money_lbl.text = "Ваши деньги: %s" % GameState.format_money(GameState.money_copper)
+
+
 func _open_npc_dialog(npc_ref: Node3D) -> void:
+	if npc_ref is QuestNPC and (npc_ref as QuestNPC).role == "merchant":
+		_refresh_vendor_money()
+		vendor_window.visible = true
+		return
 	var status: Dictionary = GameState.get_npc_quest_status()
 	var mode: String = String(status.get("mode", "none"))
 	var q_id: String = String(status.get("quest_id", ""))

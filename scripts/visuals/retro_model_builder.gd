@@ -140,6 +140,12 @@ static func build_humanoid(config: Dictionary) -> Node3D:
 		head_pivot.add_child(_make_box_mesh(Vector3(0.16, 0.12, 0.18), mat_skin, Vector3(0, 0.14, -0.22), Vector3(10, 0, 0), "Snout"))
 		head_pivot.add_child(_make_box_mesh(Vector3(0.10, 0.16, 0.06), mat_ear, Vector3(-0.20, 0.26, 0.02), Vector3(0, 0, 22), "EarL"))
 		head_pivot.add_child(_make_box_mesh(Vector3(0.10, 0.16, 0.06), mat_ear, Vector3(0.20, 0.26, 0.02), Vector3(0, 0, -22), "EarR"))
+	elif archetype == "mage":
+		# Остроконечная шляпа мага
+		var mat_hat := make_retro_material(armor_color.darkened(0.15), 0.85, 0.05)
+		head_pivot.add_child(_make_box_mesh(Vector3(0.52, 0.05, 0.52), mat_hat, Vector3(0, 0.33, 0), Vector3.ZERO, "HatBrim"))
+		head_pivot.add_child(_make_prism_or_cyl(0.02, 0.19, 0.46, 6, mat_hat, Vector3(0, 0.58, 0), Vector3(-6, 0, 0), "HatCone"))
+		head_pivot.add_child(_make_box_mesh(Vector3(0.38, 0.12, 0.36), mat_hair, Vector3(0, 0.12, 0.10), Vector3.ZERO, "HairBack"))
 	elif archetype == "guard":
 		# Шлем стражника с гребнем
 		head_pivot.add_child(_make_box_mesh(Vector3(0.38, 0.18, 0.38), mat_steel, Vector3(0, 0.31, 0), Vector3.ZERO, "HelmTop"))
@@ -192,7 +198,13 @@ static func build_humanoid(config: Dictionary) -> Node3D:
 
 static func _build_weapon(weapon_type: String, mat_steel: Material, mat_accent: Material, mat_wood: Material) -> Node3D:
 	var w := Node3D.new()
-	if weapon_type == "pickaxe":
+	if weapon_type == "staff":
+		# Посох мага с светящимся кристаллом
+		var mat_crystal := make_retro_material(Color(0.4, 0.75, 1.0), 0.2, 0.0, Color(0.35, 0.7, 1.0), 2.6)
+		w.add_child(_make_box_mesh(Vector3(0.06, 0.06, 1.5), mat_wood, Vector3(0, 0, -0.55), Vector3.ZERO, "Shaft"))
+		w.add_child(_make_box_mesh(Vector3(0.16, 0.16, 0.16), mat_crystal, Vector3(0, 0, -1.38), Vector3(45, 45, 0), "Crystal"))
+		w.add_child(_make_box_mesh(Vector3(0.12, 0.12, 0.05), mat_accent, Vector3(0, 0, -1.26), Vector3.ZERO, "Holder"))
+	elif weapon_type == "pickaxe":
 		# Кирка кобольда
 		w.add_child(_make_box_mesh(Vector3(0.06, 0.06, 0.78), mat_wood, Vector3(0, 0, -0.28), Vector3.ZERO, "Handle"))
 		w.add_child(_make_box_mesh(Vector3(0.54, 0.08, 0.09), mat_steel, Vector3(0, 0, -0.62), Vector3.ZERO, "PickHead"))

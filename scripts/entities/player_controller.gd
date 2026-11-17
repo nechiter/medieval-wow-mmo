@@ -8,6 +8,14 @@ const TURN_SPEED := 2.6
 const JUMP_VELOCITY := 9.2
 const SWING_INTERVAL := 1.9
 const MELEE_RANGE := 3.9
+const WAND_RANGE := 22.0
+const WAND_INTERVAL := 1.7
+const SPELL_RANGE := 30.0
+
+var casting_slot: int = 0
+var cast_timer: float = 0.0
+var cast_total: float = 0.0
+var cast_target: MobEntity = null
 
 var rig_node: Node3D = null
 var camera_pivot: Node3D = null
@@ -72,8 +80,22 @@ func _build_collision() -> void:
 	add_child(col)
 
 
-func _build_visuals() -> void:
-	rig_node = RetroModelBuilder.build_humanoid({
+func _visual_config() -> Dictionary:
+	if GameState.player_class == "mage":
+		return {
+			"scale": 1.05,
+			"archetype": "mage",
+			"armor_color": Color(0.22, 0.28, 0.62),
+			"accent_color": Color(0.85, 0.72, 0.30),
+			"skin_color": Color(0.88, 0.70, 0.56),
+			"pants_color": Color(0.16, 0.18, 0.40),
+			"cape_color": Color(0.30, 0.20, 0.58),
+			"hair_color": Color(0.85, 0.85, 0.88),
+			"eye_color": Color(0.35, 0.70, 1.0),
+			"weapon_type": "staff",
+			"has_cape": true,
+		}
+	return {
 		"scale": 1.05,
 		"archetype": "warrior",
 		"armor_color": Color(0.28, 0.34, 0.44),
@@ -86,7 +108,11 @@ func _build_visuals() -> void:
 		"weapon_type": "greatsword",
 		"has_cape": true,
 		"has_shield": false,
-	})
+	}
+
+
+func _build_visuals() -> void:
+	rig_node = RetroModelBuilder.build_humanoid(_visual_config())
 	add_child(rig_node)
 
 
@@ -251,6 +277,7 @@ func _physics_process(delta: float) -> void:
 		_process_movement(delta)
 
 	if not GameState.is_dead:
+		_process_cast(delta)
 		_process_auto_attack()
 	_update_camera_and_ring(delta)
 	_update_animation()
@@ -350,6 +377,8 @@ func _process_charge(delta: float) -> void:
 func _process_auto_attack() -> void:
 	if not auto_attack_enabled:
 		return
+	if casting_slot != 0:
+		return
 	var target: Node3D = GameState.current_target
 	if not is_instance_valid(target) or not (target is MobEntity):
 		auto_attack_enabled = false
@@ -359,20 +388,215 @@ func _process_auto_attack() -> void:
 		auto_attack_enabled = false
 		return
 
+	var is_mage: bool = GameState.player_class == "mage"
 	var dist: float = global_position.distance_to(mob.global_position)
-	if dist <= MELEE_RANGE and swing_timer <= 0.0:
-		swing_timer = SWING_INTERVAL
+	var reach: float = WAND_RANGE if is_mage else MELEE_RANGE
+	var interval: float = WAND_INTERVAL if is_mage else SWING_INTERVAL
+	if dist <= reach and swing_timer <= 0.0:
+		swing_timer = interval
 		attack_anim_timer = 0.52
 		_face_target(mob.global_position)
-		var dmg_info: Dictionary = GameState.get_attack_damage(1.0, 0)
-		mob.take_damage(int(dmg_info["damage"]), self, "Автоатака", bool(dmg_info["is_crit"]))
-		GameState.add_rage(15)
+		if is_mage:
+			var info: Dictionary = GameState.get_attack_damage(0.7, 0)
+			_fire_projectile(mob, Color(0.7, 0.55, 1.0), info, "Автоатака", 0.0, 0.22)
+		else:
+			var dmg_info: Dictionary = GameState.get_attack_damage(1.0, 0)
+			mob.take_damage(int(dmg_info["damage"]), self, "Автоатака", bool(dmg_info["is_crit"]))
+			GameState.add_rage(15)
 		GameState.touch_combat()
+
+
+func get_cast_progress() -> float:
+	if casting_slot == 0 or cast_total <= 0.0:
+		return 0.0
+	return clampf(1.0 - cast_timer / cast_total, 0.0, 1.0)
+
+
+func _begin_cast(slot: int, duration: float, mob: MobEntity) -> void:
+	casting_slot = slot
+	cast_total = duration
+	cast_timer = duration
+	cast_target = mob
+	_face_target(mob.global_position)
+
+
+func _cancel_cast(reason: String = "") -> void:
+	if casting_slot == 0:
+		return
+	casting_slot = 0
+	cast_target = null
+	if reason != "":
+		GameState.add_combat_log(reason, GameState.COLOR_LOG_ERROR)
+
+
+func _process_cast(delta: float) -> void:
+	if casting_slot == 0:
+		return
+	if Vector2(velocity.x, velocity.z).length() > 0.8 or not is_on_floor():
+		_cancel_cast("Заклинание прервано движением.")
+		return
+	if not is_instance_valid(cast_target) or cast_target.is_dead():
+		_cancel_cast("Цель потеряна, заклинание прервано.")
+		return
+	_face_target(cast_target.global_position)
+	cast_timer -= delta
+	if cast_timer <= 0.0:
+		var slot: int = casting_slot
+		var mob: MobEntity = cast_target
+		casting_slot = 0
+		cast_target = null
+		_finish_cast(slot, mob)
+
+
+func _finish_cast(slot: int, mob: MobEntity) -> void:
+	attack_anim_timer = 0.5
+	if slot == 2:
+		var info: Dictionary = GameState.get_attack_damage(2.4, 10)
+		_fire_projectile(mob, Color(1.0, 0.45, 0.12), info, "Огненный шар", 0.0, 0.32)
+	elif slot == 3:
+		var info2: Dictionary = GameState.get_attack_damage(1.5, 5)
+		_fire_projectile(mob, Color(0.45, 0.8, 1.0), info2, "Ледяная стрела", 4.0, 0.26)
+	GameState.touch_combat()
+
+
+func _fire_projectile(mob: MobEntity, color: Color, info: Dictionary, ability_name: String, slow_secs: float, radius: float) -> void:
+	var proj := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = radius
+	sphere.height = radius * 2.0
+	sphere.radial_segments = 8
+	sphere.rings = 4
+	proj.mesh = sphere
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.emission_energy_multiplier = 3.0
+	proj.material_override = mat
+	get_parent().add_child(proj)
+	var start: Vector3 = global_position + Vector3(0, 1.7, 0)
+	proj.global_position = start
+	var light := OmniLight3D.new()
+	light.light_color = color
+	light.light_energy = 1.5
+	light.omni_range = 5.0
+	proj.add_child(light)
+
+	var end: Vector3 = mob.global_position + Vector3(0, 1.0, 0)
+	var travel: float = maxf(0.12, start.distance_to(end) / 26.0)
+	var tw := proj.create_tween()
+	tw.tween_property(proj, "global_position", end, travel)
+	var dmg: int = int(info["damage"])
+	var crit: bool = bool(info["is_crit"])
+	tw.tween_callback(func() -> void:
+		if is_instance_valid(mob) and not mob.is_dead():
+			mob.take_damage(dmg, self, ability_name, crit)
+			if slow_secs > 0.0:
+				mob.apply_slow(slow_secs)
+		proj.queue_free()
+	)
+
+
+func _trigger_mage_ability(slot: int) -> void:
+	if casting_slot != 0 and slot != 4 and slot != 5:
+		GameState.add_combat_log("Вы уже читаете заклинание.", GameState.COLOR_LOG_ERROR)
+		return
+	match slot:
+		1:
+			if auto_attack_enabled:
+				auto_attack_enabled = false
+				GameState.add_combat_log("Стрельба из посоха остановлена.", GameState.COLOR_LOG_SYSTEM)
+			else:
+				var mob: MobEntity = _get_target_mob()
+				if mob == null:
+					mob = _find_nearest_living_mob(WAND_RANGE)
+					if mob != null:
+						GameState.set_target(mob)
+				if mob == null or mob.is_dead():
+					GameState.add_combat_log("Нет подходящей цели для атаки.", GameState.COLOR_LOG_ERROR)
+					return
+				auto_attack_enabled = true
+				GameState.add_combat_log("Маг атакует цель: %s." % mob.mob_title, GameState.COLOR_LOG_SYSTEM)
+		2, 3:
+			var cd_key: String = "fireball" if slot == 2 else "frostbolt"
+			var cost: int = 30 if slot == 2 else 20
+			var cast_time: float = 1.6 if slot == 2 else 1.2
+			var title: String = "Огненный шар" if slot == 2 else "Ледяная стрела"
+			if GameState.ability_cooldowns[cd_key] > 0.0:
+				GameState.add_combat_log("«%s» ещё перезаряжается." % title, GameState.COLOR_LOG_ERROR)
+				return
+			var target: MobEntity = _get_target_mob()
+			if target == null or target.is_dead():
+				GameState.add_combat_log("Выберите живого врага!", GameState.COLOR_LOG_ERROR)
+				return
+			if global_position.distance_to(target.global_position) > SPELL_RANGE:
+				GameState.add_combat_log("Цель слишком далеко (макс. %d м)." % int(SPELL_RANGE), GameState.COLOR_LOG_ERROR)
+				return
+			if Vector2(velocity.x, velocity.z).length() > 0.8:
+				GameState.add_combat_log("Остановитесь, чтобы читать заклинание.", GameState.COLOR_LOG_ERROR)
+				return
+			if not GameState.spend_rage(cost):
+				GameState.add_combat_log("Недостаточно маны (нужно %d)." % cost, GameState.COLOR_LOG_ERROR)
+				return
+			GameState.ability_cooldowns[cd_key] = GameState.ability_max_cooldowns[cd_key] + cast_time
+			_begin_cast(slot, cast_time, target)
+			GameState.touch_combat()
+		4:
+			if GameState.ability_cooldowns["frost_nova"] > 0.0:
+				GameState.add_combat_log("«Кольцо льда» ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			if not GameState.spend_rage(35):
+				GameState.add_combat_log("Недостаточно маны (нужно 35).", GameState.COLOR_LOG_ERROR)
+				return
+			_cancel_cast()
+			GameState.ability_cooldowns["frost_nova"] = GameState.ability_max_cooldowns["frost_nova"]
+			attack_anim_timer = 0.5
+			GameState.touch_combat()
+			_spawn_ring_fx(global_position + Vector3(0, 0.3, 0), Color(0.55, 0.85, 1.0), 0.8, 6.4, 0.5)
+			var hits: int = 0
+			for node in get_tree().get_nodes_in_group("mobs"):
+				var mob := node as MobEntity
+				if mob != null and not mob.is_dead() and global_position.distance_to(mob.global_position) <= 6.2:
+					var d: Dictionary = GameState.get_attack_damage(0.9, 4)
+					mob.take_damage(int(d["damage"]), self, "Кольцо льда", bool(d["is_crit"]))
+					if not mob.is_dead():
+						mob.apply_stun(2.5)
+					hits += 1
+			if hits == 0:
+				GameState.add_combat_log("«Кольцо льда» никого не задело.", GameState.COLOR_LOG_SYSTEM)
+		5:
+			if GameState.ability_cooldowns["blink"] > 0.0:
+				GameState.add_combat_log("«Скачок» ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			if not GameState.spend_rage(15):
+				GameState.add_combat_log("Недостаточно маны (нужно 15).", GameState.COLOR_LOG_ERROR)
+				return
+			_cancel_cast()
+			GameState.ability_cooldowns["blink"] = GameState.ability_max_cooldowns["blink"]
+			var fwd: Vector3 = -global_transform.basis.z
+			fwd.y = 0.0
+			fwd = fwd.normalized()
+			var origin: Vector3 = global_position + Vector3(0, 1.0, 0)
+			var q := PhysicsRayQueryParameters3D.create(origin, origin + fwd * 11.0)
+			q.collision_mask = 1
+			q.exclude = [get_rid()]
+			var hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(q)
+			var dist: float = 11.0
+			if not hit.is_empty():
+				dist = maxf(0.0, origin.distance_to(hit["position"]) - 1.0)
+			_spawn_ring_fx(global_position + Vector3(0, 0.3, 0), Color(0.7, 0.5, 1.0), 0.5, 1.8, 0.35)
+			global_position += fwd * dist
+			velocity = Vector3.ZERO
+			_spawn_ring_fx(global_position + Vector3(0, 0.3, 0), Color(0.7, 0.5, 1.0), 1.8, 0.5, 0.35)
+			GameState.add_combat_log("Вы совершаете «Скачок» вперёд.", GameState.COLOR_LOG_SPELL)
 
 
 func trigger_ability(slot: int) -> void:
 	if GameState.is_dead:
 		GameState.add_combat_log("Вы мертвы и не можете применять способности.", GameState.COLOR_LOG_ERROR)
+		return
+	if GameState.player_class == "mage":
+		_trigger_mage_ability(slot)
 		return
 
 	match slot:
@@ -486,7 +710,7 @@ func trigger_ability(slot: int) -> void:
 func get_swing_progress() -> float:
 	if not auto_attack_enabled:
 		return 0.0
-	return clampf(1.0 - (swing_timer / SWING_INTERVAL), 0.0, 1.0)
+	return clampf(1.0 - (swing_timer / (WAND_INTERVAL if GameState.player_class == "mage" else SWING_INTERVAL)), 0.0, 1.0)
 
 
 func _get_target_mob() -> MobEntity:
@@ -685,6 +909,8 @@ func _on_player_died() -> void:
 	auto_attack_enabled = false
 	is_charging = false
 	charge_target = null
+	casting_slot = 0
+	cast_target = null
 	_spawn_corpse()
 	if rig_node:
 		rig_node.visible = false
@@ -693,14 +919,7 @@ func _on_player_died() -> void:
 func _spawn_corpse() -> void:
 	if is_instance_valid(corpse_node):
 		corpse_node.queue_free()
-	corpse_node = RetroModelBuilder.build_humanoid({
-		"scale": 1.05,
-		"archetype": "warrior",
-		"armor_color": Color(0.28, 0.34, 0.44),
-		"accent_color": Color(0.78, 0.60, 0.22),
-		"cape_color": Color(0.62, 0.12, 0.12),
-		"weapon_type": "greatsword",
-	})
+	corpse_node = RetroModelBuilder.build_humanoid(_visual_config())
 	get_parent().add_child(corpse_node)
 	corpse_node.global_position = global_position
 	corpse_node.rotation.y = rotation.y

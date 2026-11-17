@@ -418,6 +418,15 @@ func _spawn_spirit_healer(pos: Vector3) -> void:
 func _spawn_entities() -> void:
 	_spawn_spirit_healer(Vector3(5.5, 0.08, 12.5))
 
+	var merchant := QuestNPC.new()
+	merchant.name = "MerchantElric"
+	merchant.npc_name = "Элрик"
+	merchant.npc_title = "Торговец"
+	merchant.role = "merchant"
+	merchant.position = Vector3(-3.0, 0.08, 9.0)
+	merchant.rotation.y = PI * 0.5
+	add_child(merchant)
+
 	# Игрок-Воин
 	var player := PlayerController.new()
 	player.name = "Player"

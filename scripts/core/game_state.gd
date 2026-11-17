@@ -70,6 +70,10 @@ var ability_cooldowns: Dictionary = {
 	"heroic_strike": 0.0,
 	"whirlwind": 0.0,
 	"battle_shout": 0.0,
+	"fireball": 0.0,
+	"frostbolt": 0.0,
+	"frost_nova": 0.0,
+	"blink": 0.0,
 }
 
 var ability_max_cooldowns: Dictionary = {
@@ -77,7 +81,15 @@ var ability_max_cooldowns: Dictionary = {
 	"heroic_strike": 2.5,
 	"whirlwind": 6.0,
 	"battle_shout": 15.0,
+	"fireball": 2.0,
+	"frostbolt": 1.5,
+	"frost_nova": 10.0,
+	"blink": 12.0,
 }
+
+var player_class: String = "warrior"
+var resource_type: String = "rage"
+var _mana_accum: float = 0.0
 
 
 func _ready() -> void:
@@ -118,14 +130,43 @@ func _process(delta: float) -> void:
 		else:
 			_regen_accum = 0.0
 
-		if rage > 0:
-			_rage_decay_accum += delta
-			if _rage_decay_accum >= 1.0:
+		if resource_type == "rage":
+			if rage > 0:
+				_rage_decay_accum += delta
+				if _rage_decay_accum >= 1.0:
+					_rage_decay_accum = 0.0
+					rage = maxi(0, rage - 2)
+					player_stats_changed.emit()
+			else:
 				_rage_decay_accum = 0.0
-				rage = maxi(0, rage - 2)
-				player_stats_changed.emit()
-		else:
-			_rage_decay_accum = 0.0
+
+	# Мана восстанавливается всегда: быстро вне боя, медленно в бою
+	if resource_type == "mana" and not is_dead and rage < max_rage:
+		_mana_accum += delta
+		if _mana_accum >= 1.0:
+			_mana_accum = 0.0
+			rage = mini(max_rage, rage + (3 if in_combat else 9) + level)
+			player_stats_changed.emit()
+
+
+func set_class(cls: String) -> void:
+	player_class = cls
+	if cls == "mage":
+		player_class_name = "Маг"
+		player_name = "Чародей"
+		resource_type = "mana"
+		equipped_weapon_name = "Посох ученика"
+		equipped_armor_name = "Роба ученика"
+	else:
+		player_class = "warrior"
+		player_class_name = "Воин"
+		player_name = "Воитель"
+		resource_type = "rage"
+		equipped_weapon_name = "Старый боевой меч"
+		equipped_armor_name = "Кожаный нагрудник новичка"
+	_recalculate_stats(true)
+	rage = max_rage if resource_type == "mana" else 0
+	player_stats_changed.emit()
 
 
 func _init_quests() -> void:
@@ -195,12 +236,21 @@ func _init_starting_inventory() -> void:
 
 
 func _recalculate_stats(heal_full: bool = false) -> void:
-	base_max_hp = 120 + (level - 1) * 35
+	if player_class == "mage":
+		base_max_hp = 85 + (level - 1) * 24
+		base_damage_min = 7 + (level - 1) * 2
+		base_damage_max = 11 + (level - 1) * 3
+		max_rage = 100 + (level - 1) * 14
+	else:
+		base_max_hp = 120 + (level - 1) * 35
+		base_damage_min = 9 + (level - 1) * 3
+		base_damage_max = 15 + (level - 1) * 4
+		max_rage = 100
 	max_hp = base_max_hp + equipped_armor_hp_bonus
-	base_damage_min = 9 + (level - 1) * 3
-	base_damage_max = 15 + (level - 1) * 4
 	if heal_full:
 		hp = max_hp
+		if resource_type == "mana":
+			rage = max_rage
 	else:
 		hp = mini(hp, max_hp)
 	player_stats_changed.emit()
@@ -237,7 +287,7 @@ func get_attack_damage(multiplier: float = 1.0, flat_bonus: int = 0) -> Dictiona
 
 
 func add_rage(amount: int) -> void:
-	if is_dead:
+	if is_dead or resource_type != "rage":
 		return
 	rage = mini(max_rage, rage + amount)
 	player_stats_changed.emit()
@@ -303,7 +353,7 @@ func resurrect(at_corpse: bool) -> void:
 	is_dead = false
 	is_ghost = false
 	in_combat = false
-	rage = 0
+	rage = max_rage if resource_type == "mana" else 0
 	hp = maxi(1, int(round(max_hp * (0.5 if at_corpse else 0.25))))
 	if at_corpse:
 		add_combat_log("Вы воскресли у своего тела.", COLOR_LOG_SYSTEM)
@@ -508,6 +558,33 @@ func use_or_equip_item(index: int) -> void:
 		add_money(value)
 		add_combat_log("Вы сдали трофей «%s» скупщику за %s." % [item["name"], format_money(value)], COLOR_LOG_LOOT)
 		inventory_changed.emit()
+
+
+func sell_all_junk() -> int:
+	var total: int = 0
+	for i in range(inventory.size() - 1, -1, -1):
+		var item: Dictionary = inventory[i]
+		if item.get("type", "") == "junk":
+			total += int(item.get("value", 8)) * int(item.get("count", 1))
+			inventory.remove_at(i)
+	if total > 0:
+		add_money(total)
+		add_combat_log("Вы продали трофеи за %s." % format_money(total), COLOR_LOG_LOOT)
+		inventory_changed.emit()
+	else:
+		add_combat_log("У вас нет трофеев для продажи.", COLOR_LOG_SYSTEM)
+	return total
+
+
+func buy_item(item: Dictionary, price: int) -> bool:
+	if money_copper < price:
+		add_combat_log("Недостаточно денег (нужно %s)." % format_money(price), COLOR_LOG_ERROR)
+		return false
+	money_copper -= price
+	add_item_to_inventory(item.duplicate(true))
+	add_combat_log("Куплено: [%s] за %s." % [item["name"], format_money(price)], COLOR_LOG_LOOT)
+	player_stats_changed.emit()
+	return true
 
 
 func add_combat_log(text: String, color: Color = Color.WHITE) -> void:

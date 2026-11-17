@@ -3,6 +3,7 @@ extends StaticBody3D
 
 @export var npc_name: String = "Капитан Маркус"
 @export var npc_title: String = "Командир заставы"
+@export var role: String = "quest"
 
 var rig_node: Node3D = null
 var nameplate: Label3D = null
@@ -25,7 +26,7 @@ func _ready() -> void:
 	col.position = Vector3(0, 1.0, 0)
 	add_child(col)
 
-	rig_node = RetroModelBuilder.build_humanoid({
+	var cfg: Dictionary = {
 		"scale": 1.08,
 		"archetype": "guard",
 		"armor_color": Color(0.24, 0.34, 0.56),
@@ -37,7 +38,22 @@ func _ready() -> void:
 		"weapon_type": "shortsword",
 		"has_cape": true,
 		"has_shield": true,
-	})
+	}
+	if role == "merchant":
+		cfg = {
+			"scale": 1.0,
+			"archetype": "warrior",
+			"armor_color": Color(0.45, 0.30, 0.16),
+			"accent_color": Color(0.85, 0.7, 0.25),
+			"skin_color": Color(0.86, 0.69, 0.55),
+			"pants_color": Color(0.30, 0.22, 0.14),
+			"cape_color": Color(0.45, 0.3, 0.12),
+			"hair_color": Color(0.5, 0.5, 0.5),
+			"eye_color": Color(0.2, 0.2, 0.2),
+			"weapon_type": "staff",
+			"has_cape": false,
+		}
+	rig_node = RetroModelBuilder.build_humanoid(cfg)
 	add_child(rig_node)
 
 	nameplate = Label3D.new()
@@ -88,6 +104,9 @@ func _process(delta: float) -> void:
 
 func _refresh_quest_marker() -> void:
 	if quest_marker == null:
+		return
+	if role == "merchant":
+		quest_marker.visible = false
 		return
 	var status: Dictionary = GameState.get_npc_quest_status()
 	var marker: String = String(status.get("marker", ""))

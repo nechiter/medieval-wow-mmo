@@ -30,6 +30,7 @@ var wander_target: Vector3 = Vector3.ZERO
 var wander_wait_timer: float = 1.5
 
 var stun_timer: float = 0.0
+var slow_timer: float = 0.0
 var attack_cooldown: float = 0.0
 var attack_anim_timer: float = 0.0
 var respawn_timer: float = 0.0
@@ -188,6 +189,8 @@ func _build_indicators() -> void:
 
 func _physics_process(delta: float) -> void:
 	anim_time += delta
+	if slow_timer > 0.0:
+		slow_timer = maxf(0.0, slow_timer - delta)
 	if attack_cooldown > 0.0:
 		attack_cooldown = maxf(0.0, attack_cooldown - delta)
 	if attack_anim_timer > 0.0:
@@ -282,9 +285,17 @@ func _process_chase(delta: float, player: Node3D, player_alive: bool) -> void:
 		return
 
 	var dir: Vector3 = to_player.normalized()
-	velocity.x = dir.x * move_speed
-	velocity.z = dir.z * move_speed
+	var spd: float = move_speed * (0.5 if slow_timer > 0.0 else 1.0)
+	velocity.x = dir.x * spd
+	velocity.z = dir.z * spd
 	_face_direction(dir, delta)
+
+
+func apply_slow(duration: float) -> void:
+	if state == State.DEAD:
+		return
+	slow_timer = maxf(slow_timer, duration)
+	GameState.floating_text_requested.emit(global_position + Vector3(0, 2.3, 0), "ЗАМЕДЛЕН", Color(0.55, 0.85, 1.0), false)
 
 
 func _process_attack(delta: float, player: Node3D, player_alive: bool) -> void:
