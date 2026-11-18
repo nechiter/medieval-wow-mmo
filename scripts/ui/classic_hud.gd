@@ -1,5 +1,17 @@
 ﻿extends CanvasLayer
 
+class WowDrawControl extends Control:
+	var draw_cb: Callable
+
+	func _init(cb: Callable = Callable()) -> void:
+		draw_cb = cb
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		if draw_cb.is_valid():
+			draw_cb.call(self)
+
+
 class MinimapRadar extends Control:
 	const WORLD_SPAN := 50.0
 
@@ -176,8 +188,8 @@ var root_control: Control = null
 
 # Фрейм игрока
 var player_frame: PanelContainer = null
-var player_icon_lbl: Label = null
-var player_level_lbl: Label = null
+var player_portrait_ctrl: Control = null
+var player_lvl_badge: Label = null
 var player_name_lbl: Label = null
 var player_hp_bar: ProgressBar = null
 var player_hp_lbl: Label = null
@@ -187,12 +199,16 @@ var combat_badge: Label = null
 var buff_row: HBoxContainer = null
 
 var pet_frame: PanelContainer = null
+var pet_portrait_ctrl: Control = null
 var pet_hp_bar: ProgressBar = null
 var pet_hp_lbl: Label = null
 var pet_name_lbl: Label = null
 
 # Фрейм цели
 var target_frame: PanelContainer = null
+var target_portrait_ctrl: Control = null
+var target_lvl_badge: Label = null
+var target_name_hdr: PanelContainer = null
 var target_name_lbl: Label = null
 var target_level_lbl: Label = null
 var target_hp_bar: ProgressBar = null
@@ -205,20 +221,25 @@ var target_combo_lbl: Label = null
 var zone_lbl: Label = null
 var quest_tracker_lbl: RichTextLabel = null
 
-# Низ: лог, панель команд, опыт
+# Низ: лог, панель команд, опыт, рюкзак и микроменю
 var combat_log_rtl: RichTextLabel = null
 var swing_bar: ProgressBar = null
 var cast_bar: ProgressBar = null
 var xp_bar: ProgressBar = null
 var xp_lbl: Label = null
-var money_lbl: Label = null
+var xp_ticks_ctrl: Control = null
+var br_bag_btn: Button = null
+var br_bag_count_lbl: Label = null
+var br_coin_ctrl: Control = null
 var talent_btn: Button = null
 var mute_btn: Button = null
 var action_btn_hbox: HBoxContainer = null
 var _built_action_class: String = ""
 var ability_buttons: Array[Dictionary] = []
 
-# Всплывающие окна
+# Всплывающие окна и WoW-подсказка
+var wow_tooltip_panel: PanelContainer = null
+var wow_tooltip_rtl: RichTextLabel = null
 var quest_window: PanelContainer = null
 var quest_win_tabs: HBoxContainer = null
 var quest_win_title: Label = null
@@ -234,11 +255,19 @@ var loot_list_vbox: VBoxContainer = null
 var active_loot_mob: MobEntity = null
 
 var inventory_window: PanelContainer = null
-var inv_gear_lbl: RichTextLabel = null
-var inv_craft_row: HBoxContainer = null
-var inv_items_vbox: VBoxContainer = null
+var bag_title_lbl: Label = null
+var bag_slots_grid: GridContainer = null
+var bag_slot_entries: Array[Dictionary] = []
+var bag_coin_ctrl: Control = null
+var bag_pickup_hint_lbl: Label = null
+var picked_bag_slot: int = -1
 
 var char_window: PanelContainer = null
+var char_doll_hero: Control = null
+var char_armor_slot_panel: PanelContainer = null
+var char_weapon_slot_panel: PanelContainer = null
+var char_armor_icon: Control = null
+var char_weapon_icon: Control = null
 var char_stats_rtl: RichTextLabel = null
 
 var questlog_window: PanelContainer = null
@@ -299,6 +328,7 @@ func _ready() -> void:
 	_build_help_window()
 	_build_vendor_window()
 	_build_death_banner()
+	_build_wow_tooltip()
 
 	GameState.player_stats_changed.connect(_refresh_player_frame)
 	GameState.pet_stats_changed.connect(_refresh_pet_frame)
@@ -352,9 +382,15 @@ func _unhandled_input(event: InputEvent) -> void:
 				elif loot_window.visible:
 					loot_window.visible = false
 				elif inventory_window.visible:
-					inventory_window.visible = false
+					if picked_bag_slot >= 0:
+						picked_bag_slot = -1
+						_refresh_inventory_window()
+					else:
+						inventory_window.visible = false
+					_hide_wow_tooltip()
 				elif char_window.visible:
 					char_window.visible = false
+					_hide_wow_tooltip()
 				elif questlog_window.visible:
 					questlog_window.visible = false
 				elif worldmap_window.visible:
@@ -380,17 +416,50 @@ func _process(delta: float) -> void:
 	_update_floating_texts(delta)
 
 
-func _make_panel_style(bg_col: Color = Color(0.08, 0.08, 0.11, 0.88), border_col: Color = Color(0.60, 0.49, 0.27, 0.95), border_w: int = 2) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg_col
-	sb.border_color = border_col
-	sb.set_border_width_all(border_w)
-	sb.set_corner_radius_all(4)
-	sb.content_margin_left = 8
-	sb.content_margin_right = 8
-	sb.content_margin_top = 6
-	sb.content_margin_bottom = 6
-	return sb
+func _make_panel_style(bg_col: Color = Color(0.075, 0.075, 0.105, 0.92), border_col: Color = Color(0.68, 0.56, 0.28, 0.96), border_w: int = 2) -> StyleBoxFlat:
+	return WowUIArt.make_wow_panel_style(bg_col, border_col, border_w, 7)
+
+
+func _build_wow_tooltip() -> void:
+	wow_tooltip_panel = PanelContainer.new()
+	wow_tooltip_panel.visible = false
+	wow_tooltip_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wow_tooltip_panel.custom_minimum_size = Vector2(215, 40)
+	wow_tooltip_panel.add_theme_stylebox_override("panel", WowUIArt.make_wow_tooltip_style())
+	root_control.add_child(wow_tooltip_panel)
+
+	wow_tooltip_rtl = RichTextLabel.new()
+	wow_tooltip_rtl.bbcode_enabled = true
+	wow_tooltip_rtl.fit_content = true
+	wow_tooltip_rtl.scroll_active = false
+	wow_tooltip_rtl.custom_minimum_size = Vector2(210, 20)
+	wow_tooltip_rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wow_tooltip_rtl.add_theme_font_size_override("normal_font_size", 12)
+	wow_tooltip_panel.add_child(wow_tooltip_rtl)
+
+
+func _show_wow_tooltip(bbcode: String, anchor: Control) -> void:
+	if wow_tooltip_panel == null or wow_tooltip_rtl == null:
+		return
+	wow_tooltip_rtl.text = bbcode
+	wow_tooltip_panel.visible = true
+	wow_tooltip_panel.reset_size()
+	var vp_sz: Vector2 = get_viewport().get_visible_rect().size
+	var tip_sz: Vector2 = wow_tooltip_panel.get_combined_minimum_size()
+	tip_sz.x = maxf(tip_sz.x, 232.0)
+	tip_sz.y = maxf(tip_sz.y, 70.0)
+	var gr: Rect2 = anchor.get_global_rect()
+	var px: float = gr.position.x - tip_sz.x - 8.0
+	if px < 10.0:
+		px = gr.position.x + gr.size.x + 8.0
+	px = clampf(px, 10.0, vp_sz.x - tip_sz.x - 10.0)
+	var py: float = clampf(gr.position.y - tip_sz.y * 0.35, 10.0, vp_sz.y - tip_sz.y - 10.0)
+	wow_tooltip_panel.position = Vector2(px, py)
+
+
+func _hide_wow_tooltip() -> void:
+	if wow_tooltip_panel:
+		wow_tooltip_panel.visible = false
 
 
 func _make_bar_style(col: Color) -> StyleBoxFlat:
@@ -400,9 +469,9 @@ func _make_bar_style(col: Color) -> StyleBoxFlat:
 	return sb
 
 
-func _make_progress_bar(min_h: int, fill_col: Color, bg_col: Color = Color(0.05, 0.05, 0.06, 0.9)) -> Dictionary:
+func _make_progress_bar(min_h: int, fill_col: Color, bg_col: Color = Color(0.05, 0.05, 0.06, 0.92)) -> Dictionary:
 	var bar := ProgressBar.new()
-	bar.custom_minimum_size = Vector2(180, min_h)
+	bar.custom_minimum_size = Vector2(170, min_h)
 	bar.show_percentage = false
 	bar.max_value = 100.0
 	bar.value = 100.0
@@ -413,7 +482,7 @@ func _make_progress_bar(min_h: int, fill_col: Color, bg_col: Color = Color(0.05,
 	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.add_theme_font_size_override("font_size", 12)
+	lbl.add_theme_font_size_override("font_size", 11)
 	lbl.add_theme_color_override("font_outline_color", Color.BLACK)
 	lbl.add_theme_constant_override("outline_size", 3)
 	bar.add_child(lbl)
@@ -422,94 +491,116 @@ func _make_progress_bar(min_h: int, fill_col: Color, bg_col: Color = Color(0.05,
 
 func _build_player_frame() -> void:
 	player_frame = PanelContainer.new()
-	player_frame.position = Vector2(16, 16)
-	player_frame.custom_minimum_size = Vector2(265, 86)
+	player_frame.position = Vector2(12, 12)
+	player_frame.custom_minimum_size = Vector2(276, 80)
 	player_frame.add_theme_stylebox_override("panel", _make_panel_style())
 	root_control.add_child(player_frame)
 
 	var hbox := HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 10)
+	hbox.add_theme_constant_override("separation", 8)
 	player_frame.add_child(hbox)
 
-	# Портрет Воина
-	var portrait := PanelContainer.new()
-	portrait.custom_minimum_size = Vector2(56, 56)
-	portrait.add_theme_stylebox_override("panel", _make_panel_style(Color(0.32, 0.16, 0.12, 1.0), Color(0.84, 0.68, 0.25), 2))
-	hbox.add_child(portrait)
+	var port_wrap := Control.new()
+	port_wrap.custom_minimum_size = Vector2(62, 62)
+	hbox.add_child(port_wrap)
 
-	var port_vbox := VBoxContainer.new()
-	port_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	portrait.add_child(port_vbox)
+	player_portrait_ctrl = WowDrawControl.new(func(c: Control) -> void:
+		WowUIArt.draw_portrait(c, Rect2(Vector2.ZERO, c.size), "player", GameState.player_class, false, GameState.in_combat)
+	)
+	player_portrait_ctrl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	port_wrap.add_child(player_portrait_ctrl)
 
-	player_icon_lbl = Label.new()
-	player_icon_lbl.text = _class_glyph(GameState.player_class)
-	player_icon_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	player_icon_lbl.add_theme_font_size_override("font_size", 22)
-	player_icon_lbl.modulate = Color(0.96, 0.85, 0.45)
-	port_vbox.add_child(player_icon_lbl)
+	var lvl_pill := PanelContainer.new()
+	lvl_pill.position = Vector2(-2, 42)
+	lvl_pill.custom_minimum_size = Vector2(22, 20)
+	lvl_pill.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.12, 0.08, 0.04, 0.96), Color(0.92, 0.76, 0.28), 1, 2))
+	port_wrap.add_child(lvl_pill)
 
-	player_level_lbl = Label.new()
-	player_level_lbl.text = "Ур. 1"
-	player_level_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	player_level_lbl.add_theme_font_size_override("font_size", 11)
-	player_level_lbl.modulate = Color(1.0, 0.88, 0.35)
-	port_vbox.add_child(player_level_lbl)
+	player_lvl_badge = Label.new()
+	player_lvl_badge.text = "1"
+	player_lvl_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	player_lvl_badge.add_theme_font_size_override("font_size", 11)
+	player_lvl_badge.modulate = Color(1.0, 0.88, 0.35)
+	lvl_pill.add_child(player_lvl_badge)
 
 	var vbox := VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_theme_constant_override("separation", 4)
 	hbox.add_child(vbox)
 
+	var name_hdr := PanelContainer.new()
+	name_hdr.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.14, 0.14, 0.18, 0.86), Color(0.45, 0.38, 0.22, 0.7), 1, 2))
+	vbox.add_child(name_hdr)
+
 	var name_row := HBoxContainer.new()
-	vbox.add_child(name_row)
+	name_hdr.add_child(name_row)
 
 	player_name_lbl = Label.new()
 	player_name_lbl.text = "Воитель (Воин)"
 	player_name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	player_name_lbl.add_theme_font_size_override("font_size", 14)
+	player_name_lbl.add_theme_font_size_override("font_size", 12)
 	player_name_lbl.modulate = Color(0.98, 0.86, 0.48)
 	name_row.add_child(player_name_lbl)
 
 	combat_badge = Label.new()
-	combat_badge.text = "⚔ БОЙ"
+	combat_badge.text = "⚔"
 	combat_badge.add_theme_font_size_override("font_size", 12)
-	combat_badge.modulate = Color(1.0, 0.28, 0.25)
+	combat_badge.modulate = Color(1.0, 0.28, 0.22)
 	combat_badge.visible = false
 	name_row.add_child(combat_badge)
 
-	var hp_dict := _make_progress_bar(20, Color(0.16, 0.68, 0.22))
+	var hp_dict := _make_progress_bar(18, Color(0.14, 0.68, 0.20))
 	player_hp_bar = hp_dict["bar"]
 	player_hp_lbl = hp_dict["label"]
 	vbox.add_child(player_hp_bar)
 
-	var rage_dict := _make_progress_bar(16, Color(0.76, 0.14, 0.14))
+	var rage_dict := _make_progress_bar(15, Color(0.76, 0.14, 0.14))
 	player_rage_bar = rage_dict["bar"]
 	player_rage_lbl = rage_dict["label"]
 	vbox.add_child(player_rage_bar)
 
+	# Классическая панель баффов — в правом верхнем углу слева от миникарты (как в WoW)
 	buff_row = HBoxContainer.new()
-	buff_row.add_theme_constant_override("separation", 4)
-	vbox.add_child(buff_row)
+	buff_row.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	buff_row.offset_left = -468
+	buff_row.offset_top = 14
+	buff_row.offset_right = -256
+	buff_row.offset_bottom = 66
+	buff_row.alignment = BoxContainer.ALIGNMENT_END
+	buff_row.add_theme_constant_override("separation", 6)
+	root_control.add_child(buff_row)
 
 	# Фрейм питомца-волка под портретом (для Охотника)
 	pet_frame = PanelContainer.new()
-	pet_frame.position = Vector2(16, 134)
-	pet_frame.custom_minimum_size = Vector2(226, 44)
-	pet_frame.add_theme_stylebox_override("panel", _make_panel_style(Color(0.07, 0.10, 0.08, 0.88), Color(0.35, 0.68, 0.38, 0.9)))
+	pet_frame.position = Vector2(34, 98)
+	pet_frame.custom_minimum_size = Vector2(216, 42)
+	pet_frame.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.07, 0.10, 0.08, 0.90), Color(0.38, 0.68, 0.36, 0.92), 2, 4))
 	pet_frame.visible = false
 	root_control.add_child(pet_frame)
 
+	var pet_hbox := HBoxContainer.new()
+	pet_hbox.add_theme_constant_override("separation", 6)
+	pet_frame.add_child(pet_hbox)
+
+	pet_portrait_ctrl = WowDrawControl.new(func(c: Control) -> void:
+		WowUIArt.draw_portrait(c, Rect2(Vector2.ZERO, c.size), "pet", "wolf", false, GameState.in_combat)
+	)
+	pet_portrait_ctrl.custom_minimum_size = Vector2(32, 32)
+	pet_hbox.add_child(pet_portrait_ctrl)
+
 	var pet_vbox := VBoxContainer.new()
+	pet_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	pet_vbox.add_theme_constant_override("separation", 2)
-	pet_frame.add_child(pet_vbox)
+	pet_hbox.add_child(pet_vbox)
 
 	pet_name_lbl = Label.new()
-	pet_name_lbl.text = "Спутник: Лесной страж"
+	pet_name_lbl.text = "Лесной страж"
 	pet_name_lbl.add_theme_font_size_override("font_size", 11)
 	pet_name_lbl.modulate = Color(0.55, 0.96, 0.58)
 	pet_vbox.add_child(pet_name_lbl)
 
-	var pet_hp_d := _make_progress_bar(14, Color(0.22, 0.72, 0.26))
+	var pet_hp_d := _make_progress_bar(13, Color(0.22, 0.72, 0.26))
+	pet_hp_d["bar"].custom_minimum_size = Vector2(145, 13)
 	pet_hp_bar = pet_hp_d["bar"]
 	pet_hp_lbl = pet_hp_d["label"]
 	pet_vbox.add_child(pet_hp_bar)
@@ -517,35 +608,44 @@ func _build_player_frame() -> void:
 
 func _build_target_frame() -> void:
 	target_frame = PanelContainer.new()
-	target_frame.position = Vector2(300, 16)
-	target_frame.custom_minimum_size = Vector2(250, 76)
+	target_frame.position = Vector2(302, 12)
+	target_frame.custom_minimum_size = Vector2(284, 80)
 	target_frame.add_theme_stylebox_override("panel", _make_panel_style())
 	target_frame.visible = false
 	root_control.add_child(target_frame)
 
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 8)
+	target_frame.add_child(hbox)
+
 	var vbox := VBoxContainer.new()
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_theme_constant_override("separation", 4)
-	target_frame.add_child(vbox)
+	hbox.add_child(vbox)
+
+	target_name_hdr = PanelContainer.new()
+	target_name_hdr.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.36, 0.10, 0.10, 0.88), Color(0.48, 0.38, 0.22, 0.8), 1, 2))
+	vbox.add_child(target_name_hdr)
 
 	var top_row := HBoxContainer.new()
-	vbox.add_child(top_row)
+	target_name_hdr.add_child(top_row)
 
 	target_name_lbl = Label.new()
 	target_name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	target_name_lbl.add_theme_font_size_override("font_size", 14)
+	target_name_lbl.add_theme_font_size_override("font_size", 12)
 	top_row.add_child(target_name_lbl)
 
 	target_level_lbl = Label.new()
-	target_level_lbl.add_theme_font_size_override("font_size", 12)
+	target_level_lbl.add_theme_font_size_override("font_size", 11)
 	top_row.add_child(target_level_lbl)
 
-	var hp_dict := _make_progress_bar(20, Color(0.76, 0.18, 0.16))
+	var hp_dict := _make_progress_bar(18, Color(0.76, 0.18, 0.16))
 	target_hp_bar = hp_dict["bar"]
 	target_hp_lbl = hp_dict["label"]
 	vbox.add_child(target_hp_bar)
 
 	target_cast_bar = ProgressBar.new()
-	target_cast_bar.custom_minimum_size = Vector2(220, 14)
+	target_cast_bar.custom_minimum_size = Vector2(180, 14)
 	target_cast_bar.show_percentage = false
 	target_cast_bar.max_value = 1.0
 	target_cast_bar.visible = false
@@ -567,25 +667,64 @@ func _build_target_frame() -> void:
 
 	target_dist_lbl = Label.new()
 	target_dist_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	target_dist_lbl.add_theme_font_size_override("font_size", 12)
-	target_dist_lbl.modulate = Color(0.82, 0.84, 0.88)
+	target_dist_lbl.add_theme_font_size_override("font_size", 11)
+	target_dist_lbl.modulate = Color(0.84, 0.86, 0.90)
 	bot_row.add_child(target_dist_lbl)
 
 	target_combo_lbl = Label.new()
-	target_combo_lbl.add_theme_font_size_override("font_size", 13)
+	target_combo_lbl.add_theme_font_size_override("font_size", 12)
 	target_combo_lbl.modulate = Color(1.0, 0.85, 0.22)
 	target_combo_lbl.visible = false
 	bot_row.add_child(target_combo_lbl)
+
+	# Портрет цели справа (как в WoW Classic) + золотое крыло элиты
+	var t_port_wrap := Control.new()
+	t_port_wrap.custom_minimum_size = Vector2(64, 64)
+	hbox.add_child(t_port_wrap)
+
+	target_portrait_ctrl = WowDrawControl.new(func(c: Control) -> void:
+		var t: Node3D = GameState.current_target
+		var kind := "npc"
+		var sub := ""
+		var elite := false
+		if t is MobEntity:
+			var m := t as MobEntity
+			kind = "mob"
+			sub = m.mob_id
+			elite = m.is_elite
+		elif t is PetCompanion:
+			kind = "pet"
+			sub = "wolf"
+		elif t is InteractableProp:
+			kind = "prop"
+			sub = "prop"
+		WowUIArt.draw_portrait(c, Rect2(Vector2.ZERO, c.size), kind, sub, elite, false)
+	)
+	target_portrait_ctrl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	t_port_wrap.add_child(target_portrait_ctrl)
+
+	var tlvl_pill := PanelContainer.new()
+	tlvl_pill.position = Vector2(44, 42)
+	tlvl_pill.custom_minimum_size = Vector2(22, 20)
+	tlvl_pill.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.12, 0.08, 0.04, 0.96), Color(0.92, 0.76, 0.28), 1, 2))
+	t_port_wrap.add_child(tlvl_pill)
+
+	target_lvl_badge = Label.new()
+	target_lvl_badge.text = "?"
+	target_lvl_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	target_lvl_badge.add_theme_font_size_override("font_size", 11)
+	target_lvl_badge.modulate = Color(1.0, 0.88, 0.35)
+	tlvl_pill.add_child(target_lvl_badge)
 
 
 func _build_minimap_and_tracker() -> void:
 	var right_vbox := VBoxContainer.new()
 	right_vbox.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	right_vbox.offset_left = -246
-	right_vbox.offset_top = 14
-	right_vbox.offset_right = -14
-	right_vbox.offset_bottom = 440
-	right_vbox.add_theme_constant_override("separation", 8)
+	right_vbox.offset_left = -252
+	right_vbox.offset_top = 12
+	right_vbox.offset_right = -12
+	right_vbox.offset_bottom = 292
+	right_vbox.add_theme_constant_override("separation", 6)
 	right_vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root_control.add_child(right_vbox)
 
@@ -597,38 +736,63 @@ func _build_minimap_and_tracker() -> void:
 	map_vbox.add_theme_constant_override("separation", 4)
 	map_panel.add_child(map_vbox)
 
+	var hdr_row := HBoxContainer.new()
+	map_vbox.add_child(hdr_row)
+
 	zone_lbl = Label.new()
 	zone_lbl.text = "Северноземье — Застава"
+	zone_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	zone_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	zone_lbl.add_theme_font_size_override("font_size", 13)
+	zone_lbl.add_theme_font_size_override("font_size", 12)
 	zone_lbl.modulate = Color(1.0, 0.86, 0.42)
-	map_vbox.add_child(zone_lbl)
+	hdr_row.add_child(zone_lbl)
+
+	var mini_map_btn := Button.new()
+	mini_map_btn.text = "M"
+	mini_map_btn.tooltip_text = "Открыть карту мира [M]"
+	mini_map_btn.custom_minimum_size = Vector2(22, 20)
+	mini_map_btn.focus_mode = Control.FOCUS_NONE
+	mini_map_btn.add_theme_font_size_override("font_size", 10)
+	mini_map_btn.pressed.connect(func() -> void: worldmap_window.visible = not worldmap_window.visible)
+	hdr_row.add_child(mini_map_btn)
 
 	var radar := MinimapRadar.new()
-	radar.custom_minimum_size = Vector2(208, 152)
+	radar.custom_minimum_size = Vector2(214, 134)
 	map_vbox.add_child(radar)
 
+	var compass_n := Label.new()
+	compass_n.text = "С"
+	compass_n.position = Vector2(101, 1)
+	compass_n.add_theme_font_size_override("font_size", 10)
+	compass_n.modulate = Color(1.0, 0.86, 0.42)
+	radar.add_child(compass_n)
+
 	var tracker_panel := PanelContainer.new()
-	tracker_panel.add_theme_stylebox_override("panel", _make_panel_style(Color(0.06, 0.06, 0.09, 0.72), Color(0.45, 0.38, 0.22, 0.85), 1))
+	tracker_panel.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.05, 0.05, 0.08, 0.72), Color(0.45, 0.38, 0.22, 0.85), 1, 6))
 	right_vbox.add_child(tracker_panel)
+
+	var tracker_scroll := ScrollContainer.new()
+	tracker_scroll.custom_minimum_size = Vector2(214, 74)
+	tracker_panel.add_child(tracker_scroll)
 
 	quest_tracker_lbl = RichTextLabel.new()
 	quest_tracker_lbl.bbcode_enabled = true
 	quest_tracker_lbl.fit_content = true
 	quest_tracker_lbl.scroll_active = false
-	quest_tracker_lbl.custom_minimum_size = Vector2(208, 40)
-	quest_tracker_lbl.add_theme_font_size_override("normal_font_size", 12)
-	tracker_panel.add_child(quest_tracker_lbl)
+	quest_tracker_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	quest_tracker_lbl.custom_minimum_size = Vector2(204, 34)
+	quest_tracker_lbl.add_theme_font_size_override("normal_font_size", 11)
+	tracker_scroll.add_child(quest_tracker_lbl)
 
 
 func _build_combat_log() -> void:
 	var log_panel := PanelContainer.new()
 	log_panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	log_panel.offset_left = 14
-	log_panel.offset_top = -205
-	log_panel.offset_right = 402
-	log_panel.offset_bottom = -16
-	log_panel.add_theme_stylebox_override("panel", _make_panel_style(Color(0.05, 0.05, 0.07, 0.76), Color(0.45, 0.38, 0.24, 0.85), 1))
+	log_panel.offset_left = 12
+	log_panel.offset_top = -188
+	log_panel.offset_right = 382
+	log_panel.offset_bottom = -12
+	log_panel.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.045, 0.045, 0.065, 0.78), Color(0.45, 0.38, 0.24, 0.88), 1, 7))
 	root_control.add_child(log_panel)
 
 	var vbox := VBoxContainer.new()
@@ -652,9 +816,9 @@ func _build_combat_log() -> void:
 func _build_action_bar_and_xp() -> void:
 	var bottom_center := VBoxContainer.new()
 	bottom_center.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	bottom_center.offset_left = 408
-	bottom_center.offset_right = -212
-	bottom_center.offset_top = -126
+	bottom_center.offset_left = 384
+	bottom_center.offset_right = -266
+	bottom_center.offset_top = -132
 	bottom_center.offset_bottom = -10
 	bottom_center.alignment = BoxContainer.ALIGNMENT_END
 	bottom_center.add_theme_constant_override("separation", 4)
@@ -697,131 +861,138 @@ func _build_action_bar_and_xp() -> void:
 	cast_bar.set_meta("label", cast_lbl)
 	cast_wrap.add_child(cast_bar)
 
-	# Панель способностей
+	# Панель способностей с крыльями грифонов по краям (как в WoW Classic)
 	var bar_center := CenterContainer.new()
 	bar_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bottom_center.add_child(bar_center)
 
+	var bar_row := HBoxContainer.new()
+	bar_row.add_theme_constant_override("separation", 0)
+	bar_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar_center.add_child(bar_row)
+
+	var gryph_l := WowDrawControl.new(func(c: Control) -> void:
+		WowUIArt.draw_gryphon_endcap(c, Rect2(Vector2.ZERO, c.size), false)
+	)
+	gryph_l.custom_minimum_size = Vector2(46, 54)
+	bar_row.add_child(gryph_l)
+
 	var bar_panel := PanelContainer.new()
-	bar_panel.add_theme_stylebox_override("panel", _make_panel_style())
-	bar_center.add_child(bar_panel)
+	bar_panel.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.08, 0.075, 0.095, 0.94), Color(0.68, 0.56, 0.28, 0.96), 2, 5))
+	bar_row.add_child(bar_panel)
 
 	action_btn_hbox = HBoxContainer.new()
-	action_btn_hbox.add_theme_constant_override("separation", 5)
+	action_btn_hbox.add_theme_constant_override("separation", 4)
 	bar_panel.add_child(action_btn_hbox)
 
 	_populate_action_buttons()
 
-	# Полоса опыта (XP)
-	var xp_dict := _make_progress_bar(16, Color(0.46, 0.22, 0.72), Color(0.06, 0.05, 0.08, 0.92))
-	xp_bar = xp_dict["bar"]
-	xp_lbl = xp_dict["label"]
-	bottom_center.add_child(xp_bar)
+	var gryph_r := WowDrawControl.new(func(c: Control) -> void:
+		WowUIArt.draw_gryphon_endcap(c, Rect2(Vector2.ZERO, c.size), true)
+	)
+	gryph_r.custom_minimum_size = Vector2(46, 54)
+	bar_row.add_child(gryph_r)
 
-	# Справа внизу: деньги, Герой [C], Сумка [B], Таланты [T], Квесты [L], Карта [M], Справка/Звук/Меню
+	# Сегментированная полоса опыта (20 делений, как в WoW Classic)
+	var xp_wrap := CenterContainer.new()
+	xp_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bottom_center.add_child(xp_wrap)
+
+	var xp_dict := _make_progress_bar(15, Color(0.50, 0.22, 0.78), Color(0.06, 0.05, 0.08, 0.94))
+	xp_bar = xp_dict["bar"]
+	xp_bar.custom_minimum_size = Vector2(414, 15)
+	xp_lbl = xp_dict["label"]
+	xp_wrap.add_child(xp_bar)
+
+	xp_ticks_ctrl = WowDrawControl.new(func(c: Control) -> void:
+		for seg in range(1, 20):
+			var tx: float = c.size.x * (float(seg) / 20.0)
+			c.draw_line(Vector2(tx, 1.0), Vector2(tx, c.size.y - 1.0), Color(0.04, 0.03, 0.06, 0.82), 1.2)
+		c.draw_rect(Rect2(Vector2.ZERO, c.size), Color(0.58, 0.48, 0.24, 0.90), false, 1.2)
+	)
+	xp_ticks_ctrl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	xp_bar.add_child(xp_ticks_ctrl)
+	xp_bar.move_child(xp_ticks_ctrl, 0)
+
+	# Справа внизу: компактная панель Сумки (Рюкзак + Монеты) и Микроменю WoW Classic
 	var br_panel := PanelContainer.new()
 	br_panel.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	br_panel.offset_left = -256
-	br_panel.offset_top = -178
-	br_panel.offset_right = -10
-	br_panel.offset_bottom = -10
-	br_panel.add_theme_stylebox_override("panel", _make_panel_style())
+	br_panel.offset_left = -262
+	br_panel.offset_top = -94
+	br_panel.offset_right = -12
+	br_panel.offset_bottom = -12
+	br_panel.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.085, 0.075, 0.09, 0.94), Color(0.68, 0.56, 0.28, 0.96), 2, 6))
 	root_control.add_child(br_panel)
 
 	var br_vbox := VBoxContainer.new()
-	br_vbox.add_theme_constant_override("separation", 3)
+	br_vbox.add_theme_constant_override("separation", 5)
 	br_panel.add_child(br_vbox)
 
-	money_lbl = Label.new()
-	money_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	money_lbl.add_theme_font_size_override("font_size", 12)
-	money_lbl.modulate = Color(1.0, 0.88, 0.38)
-	br_vbox.add_child(money_lbl)
+	var bag_coin_row := HBoxContainer.new()
+	bag_coin_row.add_theme_constant_override("separation", 6)
+	br_vbox.add_child(bag_coin_row)
 
-	var row1 := HBoxContainer.new()
-	row1.add_theme_constant_override("separation", 3)
-	br_vbox.add_child(row1)
+	br_bag_btn = Button.new()
+	br_bag_btn.custom_minimum_size = Vector2(114, 30)
+	br_bag_btn.focus_mode = Control.FOCUS_NONE
+	br_bag_btn.tooltip_text = "Открыть Рюкзак [B]"
+	br_bag_btn.pressed.connect(_toggle_inventory)
+	bag_coin_row.add_child(br_bag_btn)
 
-	var bag_btn := Button.new()
-	bag_btn.text = "[B] Сумка"
-	bag_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bag_btn.focus_mode = Control.FOCUS_NONE
-	bag_btn.add_theme_font_size_override("font_size", 11)
-	bag_btn.pressed.connect(_toggle_inventory)
-	row1.add_child(bag_btn)
+	var bag_btn_hb := HBoxContainer.new()
+	bag_btn_hb.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bag_btn_hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bag_btn_hb.add_theme_constant_override("separation", 4)
+	br_bag_btn.add_child(bag_btn_hb)
 
-	talent_btn = Button.new()
-	talent_btn.text = "[T] Таланты"
-	talent_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	talent_btn.focus_mode = Control.FOCUS_NONE
-	talent_btn.add_theme_font_size_override("font_size", 11)
-	talent_btn.pressed.connect(_toggle_talents)
-	row1.add_child(talent_btn)
+	var bag_emblem := WowDrawControl.new(func(c: Control) -> void:
+		WowUIArt.draw_backpack_medallion(c, Rect2(Vector2.ZERO, c.size))
+	)
+	bag_emblem.custom_minimum_size = Vector2(24, 24)
+	bag_btn_hb.add_child(bag_emblem)
 
-	var row_mid := HBoxContainer.new()
-	row_mid.add_theme_constant_override("separation", 3)
-	br_vbox.add_child(row_mid)
+	br_bag_count_lbl = Label.new()
+	br_bag_count_lbl.text = "Рюкзак 0/16"
+	br_bag_count_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	br_bag_count_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	br_bag_count_lbl.add_theme_font_size_override("font_size", 11)
+	br_bag_count_lbl.modulate = Color(0.98, 0.88, 0.45)
+	bag_btn_hb.add_child(br_bag_count_lbl)
 
-	var char_btn := Button.new()
-	char_btn.text = "[C] Герой"
-	char_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	char_btn.focus_mode = Control.FOCUS_NONE
-	char_btn.add_theme_font_size_override("font_size", 11)
-	char_btn.pressed.connect(_toggle_char_window)
-	row_mid.add_child(char_btn)
+	br_coin_ctrl = WowDrawControl.new(func(c: Control) -> void:
+		WowUIArt.draw_coin_strip(c, Rect2(Vector2.ZERO, c.size), GameState.money_copper)
+	)
+	br_coin_ctrl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	br_coin_ctrl.custom_minimum_size = Vector2(96, 26)
+	bag_coin_row.add_child(br_coin_ctrl)
 
-	var ql_btn := Button.new()
-	ql_btn.text = "[L] Квесты"
-	ql_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ql_btn.focus_mode = Control.FOCUS_NONE
-	ql_btn.add_theme_font_size_override("font_size", 11)
-	ql_btn.pressed.connect(_toggle_questlog)
-	row_mid.add_child(ql_btn)
+	var micro_row := HBoxContainer.new()
+	micro_row.add_theme_constant_override("separation", 3)
+	br_vbox.add_child(micro_row)
 
-	var map_btn := Button.new()
-	map_btn.text = "[M] Карта"
-	map_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	map_btn.focus_mode = Control.FOCUS_NONE
-	map_btn.add_theme_font_size_override("font_size", 11)
-	map_btn.pressed.connect(func() -> void: worldmap_window.visible = not worldmap_window.visible)
-	row_mid.add_child(map_btn)
-
-	var row2 := HBoxContainer.new()
-	row2.add_theme_constant_override("separation", 3)
-	br_vbox.add_child(row2)
-
-	var help_btn := Button.new()
-	help_btn.text = "[H] Помощь"
-	help_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	help_btn.focus_mode = Control.FOCUS_NONE
-	help_btn.add_theme_font_size_override("font_size", 11)
-	help_btn.pressed.connect(func() -> void: help_window.visible = not help_window.visible)
-	row2.add_child(help_btn)
-
-	mute_btn = Button.new()
-	mute_btn.text = "Звук [N]"
-	mute_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	mute_btn.focus_mode = Control.FOCUS_NONE
-	mute_btn.add_theme_font_size_override("font_size", 11)
-	mute_btn.pressed.connect(_toggle_mute)
-	row2.add_child(mute_btn)
-
-	var menu_btn := Button.new()
-	menu_btn.text = "[Esc] Меню / Сохранить"
-	menu_btn.focus_mode = Control.FOCUS_NONE
-	menu_btn.add_theme_font_size_override("font_size", 11)
-	menu_btn.pressed.connect(_toggle_menu)
-	br_vbox.add_child(menu_btn)
-
-
-func _class_glyph(cls: String) -> String:
-	if cls == "mage":
-		return "✦"
-	if cls == "rogue":
-		return "🗡"
-	if cls == "hunter":
-		return "➶"
-	return "⚔"
+	var micro_defs: Array[Dictionary] = [
+		{"key": "C", "tip": "[C] Персонаж и экипировка", "cb": _toggle_char_window, "ref": "char"},
+		{"key": "T", "tip": "[T] Древо талантов", "cb": _toggle_talents, "ref": "talent"},
+		{"key": "L", "tip": "[L] Журнал заданий", "cb": _toggle_questlog, "ref": "quest"},
+		{"key": "M", "tip": "[M] Карта долины", "cb": func() -> void: worldmap_window.visible = not worldmap_window.visible, "ref": "map"},
+		{"key": "H", "tip": "[H] Помощь и управление", "cb": func() -> void: help_window.visible = not help_window.visible, "ref": "help"},
+		{"key": "N", "tip": "[N] Вкл/выкл звук", "cb": _toggle_mute, "ref": "mute"},
+		{"key": "Esc", "tip": "[Esc] Главное меню / Сохранение", "cb": _toggle_menu, "ref": "menu"},
+	]
+	for md in micro_defs:
+		var mb := Button.new()
+		mb.text = String(md["key"])
+		mb.tooltip_text = String(md["tip"])
+		mb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		mb.custom_minimum_size = Vector2(30, 26)
+		mb.focus_mode = Control.FOCUS_NONE
+		mb.add_theme_font_size_override("font_size", 11)
+		mb.pressed.connect(md["cb"] as Callable)
+		micro_row.add_child(mb)
+		if String(md["ref"]) == "talent":
+			talent_btn = mb
+		elif String(md["ref"]) == "mute":
+			mute_btn = mb
 
 
 func _populate_action_buttons() -> void:
@@ -840,7 +1011,7 @@ func _populate_action_buttons() -> void:
 			"sub": "Меч",
 			"cd_key": "",
 			"rage_cost": 0,
-			"tip": "[1] Автоатака: вкл/выкл удары оружием. Накопление +15 Ярости за удар.",
+			"tip": "[color=#ffd866][b][1] Автоатака[/b][/color]\nВкл/выкл удары оружием.\nНакопление +15 Ярости за удар.",
 		},
 		{
 			"slot": 2,
@@ -849,7 +1020,7 @@ func _populate_action_buttons() -> void:
 			"sub": "+20 Яр",
 			"cd_key": "charge",
 			"rage_cost": 0,
-			"tip": "[2] Рывок (4-22 м): рывок к врагу, оглушение на 2 сек и +20 Ярости. КД 8 сек.",
+			"tip": "[color=#ffd866][b][2] Рывок[/b][/color]\nДистанция 4–22 м • КД 8 сек\nРывок к врагу, оглушение на 2 сек и +20 Ярости.",
 		},
 		{
 			"slot": 3,
@@ -858,7 +1029,7 @@ func _populate_action_buttons() -> void:
 			"sub": "15 Яр",
 			"cd_key": "heroic_strike",
 			"rage_cost": 15,
-			"tip": "[3] Героический удар (15 Ярости): мощный удар на 145% урона +7. КД 2.5 сек.",
+			"tip": "[color=#ffd866][b][3] Героический удар[/b][/color]\n15 Ярости • КД 2.5 сек\nМощный удар на 145% урона +7.",
 		},
 		{
 			"slot": 4,
@@ -867,7 +1038,7 @@ func _populate_action_buttons() -> void:
 			"sub": "25 Яр",
 			"cd_key": "whirlwind",
 			"rage_cost": 25,
-			"tip": "[4] Вихрь (25 Ярости): круговой удар по всем врагам в радиусе 5 м. КД 6 сек.",
+			"tip": "[color=#ffd866][b][4] Вихрь[/b][/color]\n25 Ярости • КД 6 сек\nКруговой удар по всем врагам в радиусе 5 м.",
 		},
 		{
 			"slot": 5,
@@ -876,44 +1047,44 @@ func _populate_action_buttons() -> void:
 			"sub": "+25%/Хил",
 			"cd_key": "battle_shout",
 			"rage_cost": 0,
-			"tip": "[5] Боевой крик: +25% к урону на 30 сек и лечение на 35% HP. КД 15 сек.",
+			"tip": "[color=#ffd866][b][5] Боевой крик[/b][/color]\nМгновенно • КД 15 сек\n+25% к урону на 30 сек и лечение на 35% здоровья.",
 		},
 	]
 	var mage_cfg: Array[Dictionary] = [
 		{"slot": 1, "key": "1", "title": "Атака", "sub": "Посох", "cd_key": "", "rage_cost": 0,
-			"tip": "[1] Атака посохом: дальний автовыстрел (22 м), мана не тратится."},
+			"tip": "[color=#66b3ff][b][1] Атака посохом[/b][/color]\nДальний автовыстрел (22 м), мана не тратится."},
 		{"slot": 2, "key": "2", "title": "Шар", "sub": "30 Мана", "cd_key": "fireball", "rage_cost": 30,
-			"tip": "[2] Огненный шар (30 маны, каст 1.6 сек): мощный урон на дистанции до 30 м."},
+			"tip": "[color=#ff944d][b][2] Огненный шар[/b][/color]\n30 Маны • Каст 1.6 сек\nМощный огненный урон на дистанции до 30 м."},
 		{"slot": 3, "key": "3", "title": "Стрела", "sub": "20 Мана", "cd_key": "frostbolt", "rage_cost": 20,
-			"tip": "[3] Ледяная стрела (20 маны, каст 1.2 сек): урон и замедление цели на 4 сек."},
+			"tip": "[color=#66d9ff][b][3] Ледяная стрела[/b][/color]\n20 Маны • Каст 1.2 сек\nУрон холодом и замедление цели на 4 сек."},
 		{"slot": 4, "key": "4", "title": "Кольцо", "sub": "35 Мана", "cd_key": "frost_nova", "rage_cost": 35,
-			"tip": "[4] Кольцо льда (35 маны): урон и заморозка всех врагов в радиусе 6 м на 2.5 сек. КД 10 сек."},
+			"tip": "[color=#66d9ff][b][4] Кольцо льда[/b][/color]\n35 Маны • КД 10 сек\nЗаморозка всех врагов в радиусе 6 м на 2.5 сек."},
 		{"slot": 5, "key": "5", "title": "Скачок", "sub": "15 Мана", "cd_key": "blink", "rage_cost": 15,
-			"tip": "[5] Скачок (15 маны): мгновенный бросок на 11 м вперёд. КД 12 сек."},
+			"tip": "[color=#cc88ff][b][5] Скачок[/b][/color]\n15 Маны • КД 12 сек\nМгновенный телепорт на 11 м вперёд."},
 	]
 	var rogue_cfg: Array[Dictionary] = [
 		{"slot": 1, "key": "1", "title": "Атака", "sub": "Кинжалы", "cd_key": "", "rage_cost": 0,
-			"tip": "[1] Автоатака: быстрые удары парными кинжалами."},
+			"tip": "[color=#fff066][b][1] Автоатака[/b][/color]\nБыстрые удары парными кинжалами."},
 		{"slot": 2, "key": "2", "title": "Удар", "sub": "35 Эн", "cd_key": "sinister_strike", "rage_cost": 35,
-			"tip": "[2] Коварный удар (35 энергии, +1★) / Внезапный удар из Незаметности (40 энергии, 225% урона, +2★)."},
+			"tip": "[color=#fff066][b][2] Коварный / Внезапный удар[/b][/color]\n35–40 Энергии\nДаёт +1★ (или +2★ из Незаметности с бонусом урона)."},
 		{"slot": 3, "key": "3", "title": "Финишер", "sub": "30 Эн", "cd_key": "eviscerate", "rage_cost": 30,
-			"tip": "[3] Потрошение (30 энергии): тратит 1-5★ серии для огромного урона."},
+			"tip": "[color=#ff6666][b][3] Потрошение[/b][/color]\n30 Энергии\nЗавершающий приём: расходует 1–5★ серии."},
 		{"slot": 4, "key": "4", "title": "Скрытн.", "sub": "Стелс", "cd_key": "stealth", "rage_cost": 0,
-			"tip": "[4] Незаметность: враги замечают вас только в упор, усиливает следующий [2]."},
+			"tip": "[color=#99b3ff][b][4] Незаметность[/b][/color]\nСкрывает вас от врагов и усиливает следующий [2]."},
 		{"slot": 5, "key": "5", "title": "Стан", "sub": "25 Эн", "cd_key": "kidney_shot", "rage_cost": 25,
-			"tip": "[5] Удар по почкам (25 энергии): оглушает цель на 2 + 0.5★ сек."},
+			"tip": "[color=#ffd866][b][5] Удар по почкам[/b][/color]\n25 Энергии • Нужно ≥1★\nОглушает цель на 2 + 0.5★ сек."},
 	]
 	var hunter_cfg: Array[Dictionary] = [
 		{"slot": 1, "key": "1", "title": "Выстр.", "sub": "Лук", "cd_key": "", "rage_cost": 0,
-			"tip": "[1] Стрельба из лука: дальний автовыстрел (24 м), мана не тратится."},
+			"tip": "[color=#88ee66][b][1] Автострельба из лука[/b][/color]\nДальний выстрел (24 м), мана не тратится."},
 		{"slot": 2, "key": "2", "title": "Аркан", "sub": "25 Мана", "cd_key": "arcane_shot", "rage_cost": 25,
-			"tip": "[2] Чародейский выстрел (25 маны): мощный мгновенный выстрел. КД 4 сек."},
+			"tip": "[color=#66ccff][b][2] Чародейский выстрел[/b][/color]\n25 Маны • КД 4 сек\nМощный мгновенный выстрел."},
 		{"slot": 3, "key": "3", "title": "Яд", "sub": "25 Мана", "cd_key": "serpent_sting", "rage_cost": 25,
-			"tip": "[3] Укус змеи (25 маны): ядовитая стрела, наносит периодический урон 8 сек."},
+			"tip": "[color=#66ee66][b][3] Укус змеи[/b][/color]\n25 Маны\nОтравляет цель периодическим уроном на 8 сек."},
 		{"slot": 4, "key": "4", "title": "Шок", "sub": "15 Мана", "cd_key": "concussive_shot", "rage_cost": 15,
-			"tip": "[4] Шокирующий выстрел (15 маны): сильно замедляет врага и сбивает каст."},
+			"tip": "[color=#ffd866][b][4] Шокирующий выстрел[/b][/color]\n15 Маны\nЗамедляет врага на 4.5 сек и сбивает каст."},
 		{"slot": 5, "key": "5", "title": "Зверь", "sub": "20 Мана", "cd_key": "mend_pet", "rage_cost": 20,
-			"tip": "[5] Зов / Лечение зверя (20 маны): лечит/воскрешает волка (+25% урона на 15с)."},
+			"tip": "[color=#66ee66][b][5] Лечение зверя[/b][/color]\n20 Маны\nЛечит или воскрешает волка (+25% урона на 15 сек)."},
 	]
 	if GameState.player_class == "mage":
 		abilities_cfg = mage_cfg
@@ -924,20 +1095,21 @@ func _populate_action_buttons() -> void:
 
 	var quick_items_cfg: Array[Dictionary] = [
 		{"slot": 6, "key": "6", "title": "Зелье", "sub": "HP", "cd_key": "__item_hp", "rage_cost": 0,
-			"tip": "[6] Быстрое лечение: пьёт лечебное зелье или использует травяной бинт."},
+			"tip": "[color=#1eff00][b][6] Зелье / Бинт[/b][/color]\nБыстро применяет лечебное зелье или травяной бинт из сумки."},
 		{"slot": 7, "key": "7", "title": "Пай/Эл", "sub": "Бафф", "cd_key": "__item_util", "rage_cost": 0,
-			"tip": "[7] Использует Эликсир стойкости, Зелье маны или Дорожный паёк."},
+			"tip": "[color=#1eff00][b][7] Эликсир / Мана / Паёк[/b][/color]\nПьёт Эликсир стойкости, зелье маны или ест Дорожный паёк."},
 		{"slot": 8, "key": "8", "title": "Камень", "sub": "Дом", "cd_key": "hearthstone", "rage_cost": 0,
-			"tip": "[8] Камень возвращения: переносит вас обратно на Заставу Северноземья (КД 45с)."},
+			"tip": "[color=#66d9ff][b][8] Камень возвращения[/b][/color]\nКаст 2.5 сек • КД 45 сек\nВозвращает на Заставу Северноземья."},
 	]
 	abilities_cfg.append_array(quick_items_cfg)
 
 	for cfg in abilities_cfg:
 		var btn := Button.new()
-		btn.custom_minimum_size = Vector2(64, 54)
-		btn.tooltip_text = cfg["tip"]
+		btn.custom_minimum_size = Vector2(46, 46)
 		btn.focus_mode = Control.FOCUS_NONE
 		var slot_idx: int = int(cfg["slot"])
+		var cd_key_cap: String = String(cfg["cd_key"])
+		var tip_str: String = String(cfg["tip"])
 		btn.pressed.connect(func() -> void:
 			if slot_idx == 6:
 				GameState.use_first_item_by_types(["potion", "bandage"])
@@ -950,29 +1122,41 @@ func _populate_action_buttons() -> void:
 				if p != null:
 					p.trigger_ability(slot_idx)
 		)
+		btn.mouse_entered.connect(func() -> void: _show_wow_tooltip(tip_str, btn))
+		btn.mouse_exited.connect(_hide_wow_tooltip)
 
-		var btn_vbox := VBoxContainer.new()
-		btn_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-		btn_vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		btn_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-		btn.add_child(btn_vbox)
+		var icon_art := WowDrawControl.new(func(c: Control) -> void:
+			WowUIArt.draw_ability_icon(c, Rect2(Vector2.ZERO, c.size), cd_key_cap, GameState.player_class)
+		)
+		icon_art.set_anchors_preset(Control.PRESET_FULL_RECT)
+		btn.add_child(icon_art)
 
-		var lbl_top := Label.new()
-		lbl_top.text = "[%s] %s" % [cfg["key"], cfg["title"]]
-		lbl_top.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lbl_top.add_theme_font_size_override("font_size", 10)
-		btn_vbox.add_child(lbl_top)
+		var lbl_key := Label.new()
+		lbl_key.text = String(cfg["key"])
+		lbl_key.position = Vector2(3, 1)
+		lbl_key.add_theme_font_size_override("font_size", 10)
+		lbl_key.add_theme_color_override("font_outline_color", Color.BLACK)
+		lbl_key.add_theme_constant_override("outline_size", 3)
+		lbl_key.modulate = Color(0.95, 0.94, 0.88)
+		btn.add_child(lbl_key)
 
 		var lbl_sub := Label.new()
-		lbl_sub.text = cfg["sub"]
-		lbl_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_sub.text = ""
+		lbl_sub.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+		lbl_sub.offset_left = -36
+		lbl_sub.offset_top = -15
+		lbl_sub.offset_right = -3
+		lbl_sub.offset_bottom = -1
+		lbl_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		lbl_sub.add_theme_font_size_override("font_size", 10)
-		lbl_sub.modulate = Color(0.92, 0.82, 0.45)
-		btn_vbox.add_child(lbl_sub)
+		lbl_sub.add_theme_color_override("font_outline_color", Color.BLACK)
+		lbl_sub.add_theme_constant_override("outline_size", 3)
+		lbl_sub.modulate = Color(1.0, 0.94, 0.45)
+		btn.add_child(lbl_sub)
 
 		var cd_dim := ColorRect.new()
 		cd_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-		cd_dim.color = Color(0.03, 0.03, 0.05, 0.86)
+		cd_dim.color = Color(0.03, 0.03, 0.05, 0.84)
 		cd_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		cd_dim.visible = false
 		btn.add_child(cd_dim)
@@ -981,7 +1165,7 @@ func _populate_action_buttons() -> void:
 		cd_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
 		cd_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		cd_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		cd_lbl.add_theme_font_size_override("font_size", 18)
+		cd_lbl.add_theme_font_size_override("font_size", 14)
 		cd_lbl.add_theme_color_override("font_outline_color", Color.BLACK)
 		cd_lbl.add_theme_constant_override("outline_size", 4)
 		cd_lbl.modulate = Color(1.0, 0.92, 0.35)
@@ -991,6 +1175,7 @@ func _populate_action_buttons() -> void:
 		action_btn_hbox.add_child(btn)
 		ability_buttons.append({
 			"btn": btn,
+			"icon_art": icon_art,
 			"cd_dim": cd_dim,
 			"cd_lbl": cd_lbl,
 			"sub_lbl": lbl_sub,
@@ -1000,8 +1185,8 @@ func _populate_action_buttons() -> void:
 
 func _build_quest_window() -> void:
 	quest_window = PanelContainer.new()
-	quest_window.position = Vector2(16, 186)
-	quest_window.custom_minimum_size = Vector2(360, 315)
+	quest_window.position = Vector2(14, 150)
+	quest_window.custom_minimum_size = Vector2(356, 315)
 	quest_window.add_theme_stylebox_override("panel", _make_panel_style(Color(0.86, 0.78, 0.60, 0.98), Color(0.38, 0.24, 0.11, 1.0), 3))
 	quest_window.visible = false
 	root_control.add_child(quest_window)
@@ -1058,10 +1243,10 @@ func _build_quest_window() -> void:
 func _build_loot_window() -> void:
 	loot_window = PanelContainer.new()
 	loot_window.set_anchors_preset(Control.PRESET_CENTER)
-	loot_window.offset_left = -140
-	loot_window.offset_top = -130
-	loot_window.offset_right = 140
-	loot_window.offset_bottom = 130
+	loot_window.offset_left = -135
+	loot_window.offset_top = -140
+	loot_window.offset_right = 135
+	loot_window.offset_bottom = 140
 	loot_window.add_theme_stylebox_override("panel", _make_panel_style())
 	loot_window.visible = false
 	root_control.add_child(loot_window)
@@ -1073,7 +1258,7 @@ func _build_loot_window() -> void:
 	loot_win_title = Label.new()
 	loot_win_title.text = "Добыча"
 	loot_win_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	loot_win_title.add_theme_font_size_override("font_size", 15)
+	loot_win_title.add_theme_font_size_override("font_size", 14)
 	loot_win_title.modulate = Color(1.0, 0.86, 0.38)
 	vbox.add_child(loot_win_title)
 
@@ -1101,11 +1286,11 @@ func _build_loot_window() -> void:
 func _build_inventory_window() -> void:
 	inventory_window = PanelContainer.new()
 	inventory_window.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	inventory_window.offset_left = -380
-	inventory_window.offset_top = -530
-	inventory_window.offset_right = -10
-	inventory_window.offset_bottom = -182
-	inventory_window.add_theme_stylebox_override("panel", _make_panel_style())
+	inventory_window.offset_left = -262
+	inventory_window.offset_top = -434
+	inventory_window.offset_right = -12
+	inventory_window.offset_bottom = -98
+	inventory_window.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.11, 0.095, 0.085, 0.96), Color(0.70, 0.58, 0.30, 0.98), 2, 7))
 	inventory_window.visible = false
 	root_control.add_child(inventory_window)
 
@@ -1113,96 +1298,285 @@ func _build_inventory_window() -> void:
 	vbox.add_theme_constant_override("separation", 5)
 	inventory_window.add_child(vbox)
 
+	# Шапка в точности как в WoW Classic: медальон рюкзака + заголовок + сортировка + X
 	var title_row := HBoxContainer.new()
+	title_row.add_theme_constant_override("separation", 6)
 	vbox.add_child(title_row)
 
-	var title := Label.new()
-	title.text = "Сумка и ремесло [B]"
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title.add_theme_font_size_override("font_size", 15)
-	title.modulate = Color(1.0, 0.86, 0.38)
-	title_row.add_child(title)
+	var emblem := WowDrawControl.new(func(c: Control) -> void:
+		WowUIArt.draw_backpack_medallion(c, Rect2(Vector2.ZERO, c.size))
+	)
+	emblem.custom_minimum_size = Vector2(28, 28)
+	title_row.add_child(emblem)
+
+	bag_title_lbl = Label.new()
+	bag_title_lbl.text = "Рюкзак (0/16)"
+	bag_title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bag_title_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	bag_title_lbl.add_theme_font_size_override("font_size", 13)
+	bag_title_lbl.modulate = Color(1.0, 0.86, 0.38)
+	title_row.add_child(bag_title_lbl)
+
+	var sort_btn := Button.new()
+	sort_btn.text = "Сорт"
+	sort_btn.tooltip_text = "Упорядочить предметы в рюкзаке"
+	sort_btn.focus_mode = Control.FOCUS_NONE
+	sort_btn.add_theme_font_size_override("font_size", 10)
+	sort_btn.pressed.connect(func() -> void:
+		picked_bag_slot = -1
+		GameState.sort_backpack()
+	)
+	title_row.add_child(sort_btn)
 
 	var close_btn := Button.new()
 	close_btn.text = "X"
-	close_btn.pressed.connect(func() -> void: inventory_window.visible = false)
+	close_btn.focus_mode = Control.FOCUS_NONE
+	close_btn.add_theme_font_size_override("font_size", 11)
+	close_btn.pressed.connect(func() -> void:
+		picked_bag_slot = -1
+		inventory_window.visible = false
+		_hide_wow_tooltip()
+	)
 	title_row.add_child(close_btn)
 
-	inv_gear_lbl = RichTextLabel.new()
-	inv_gear_lbl.bbcode_enabled = true
-	inv_gear_lbl.fit_content = true
-	inv_gear_lbl.scroll_active = false
-	inv_gear_lbl.add_theme_font_size_override("normal_font_size", 12)
-	vbox.add_child(inv_gear_lbl)
+	bag_pickup_hint_lbl = Label.new()
+	bag_pickup_hint_lbl.text = "Выберите ячейку (ПКМ отмена)"
+	bag_pickup_hint_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	bag_pickup_hint_lbl.add_theme_font_size_override("font_size", 10)
+	bag_pickup_hint_lbl.modulate = Color(1.0, 0.90, 0.35)
+	bag_pickup_hint_lbl.visible = false
+	vbox.add_child(bag_pickup_hint_lbl)
 
-	var craft_lbl := Label.new()
-	craft_lbl.text = "Ремесло (Первая помощь / Алхимия):"
-	craft_lbl.add_theme_font_size_override("font_size", 11)
-	craft_lbl.modulate = Color(0.75, 0.92, 0.65)
-	vbox.add_child(craft_lbl)
+	# Сетка 4x4 (16 классических ячеек рюкзака WoW)
+	var grid_center := CenterContainer.new()
+	grid_center.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_child(grid_center)
 
-	inv_craft_row = HBoxContainer.new()
-	inv_craft_row.add_theme_constant_override("separation", 4)
-	vbox.add_child(inv_craft_row)
+	bag_slots_grid = GridContainer.new()
+	bag_slots_grid.columns = 4
+	bag_slots_grid.add_theme_constant_override("h_separation", 4)
+	bag_slots_grid.add_theme_constant_override("v_separation", 4)
+	grid_center.add_child(bag_slots_grid)
 
-	for rec in [
-		{"id": "bandage", "label": "Бинт (2 Мир)", "tip": "Создать 2x Травяной бинт (+80 HP) из 2x Мироцвет."},
-		{"id": "potion", "label": "Зелье (М+С)", "tip": "Сварить Зелье (+95 HP) из 1x Мироцвет и 1x Сребролист."},
-		{"id": "elixir", "label": "Эликсир (С+К)", "tip": "Сварить Эликсир стойкости (+25 ОЗ, +15% урон) из Сребролист + Лазурный кристалл."},
-	]:
-		var cb := Button.new()
-		cb.text = rec["label"]
-		cb.tooltip_text = rec["tip"]
-		cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		cb.focus_mode = Control.FOCUS_NONE
-		cb.add_theme_font_size_override("font_size", 11)
-		var rid: String = String(rec["id"])
-		cb.pressed.connect(func() -> void: GameState.craft_recipe(rid))
-		inv_craft_row.add_child(cb)
+	bag_slot_entries.clear()
+	for slot_i in range(GameState.BAG_CAPACITY):
+		var slot_panel := PanelContainer.new()
+		slot_panel.custom_minimum_size = Vector2(50, 50)
+		slot_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+		slot_panel.add_theme_stylebox_override("panel", WowUIArt.make_slot_box_style("common", true, false, false))
+		bag_slots_grid.add_child(slot_panel)
 
+		var entry: Dictionary = {
+			"slot": slot_i,
+			"panel": slot_panel,
+			"item": {},
+			"inv_index": -1,
+			"hovered": false,
+		}
+
+		var icon_c := WowDrawControl.new(func(c: Control) -> void:
+			var it: Dictionary = entry["item"]
+			if not it.is_empty():
+				WowUIArt.draw_item_icon(c, Rect2(Vector2.ZERO, c.size), it, GameState.player_class)
+		)
+		icon_c.set_anchors_preset(Control.PRESET_FULL_RECT)
+		slot_panel.add_child(icon_c)
+		entry["icon_ctrl"] = icon_c
+
+		var cnt_lbl := Label.new()
+		cnt_lbl.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+		cnt_lbl.offset_left = -28
+		cnt_lbl.offset_top = -16
+		cnt_lbl.offset_right = -3
+		cnt_lbl.offset_bottom = -1
+		cnt_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		cnt_lbl.add_theme_font_size_override("font_size", 11)
+		cnt_lbl.add_theme_color_override("font_outline_color", Color.BLACK)
+		cnt_lbl.add_theme_constant_override("outline_size", 3)
+		cnt_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		slot_panel.add_child(cnt_lbl)
+		entry["count_lbl"] = cnt_lbl
+
+		var cd_dim := ColorRect.new()
+		cd_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+		cd_dim.color = Color(0.03, 0.03, 0.05, 0.78)
+		cd_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cd_dim.visible = false
+		slot_panel.add_child(cd_dim)
+		entry["cd_dim"] = cd_dim
+
+		var cd_lbl := Label.new()
+		cd_lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+		cd_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		cd_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		cd_lbl.add_theme_font_size_override("font_size", 12)
+		cd_lbl.add_theme_color_override("font_outline_color", Color.BLACK)
+		cd_lbl.add_theme_constant_override("outline_size", 3)
+		cd_lbl.modulate = Color(1.0, 0.90, 0.35)
+		cd_lbl.visible = false
+		slot_panel.add_child(cd_lbl)
+		entry["cd_lbl"] = cd_lbl
+
+		var cap_slot: int = slot_i
+		slot_panel.mouse_entered.connect(func() -> void: _on_bag_slot_hover(cap_slot, true))
+		slot_panel.mouse_exited.connect(func() -> void: _on_bag_slot_hover(cap_slot, false))
+		slot_panel.gui_input.connect(func(ev: InputEvent) -> void: _on_bag_slot_gui_input(cap_slot, ev))
+
+		bag_slot_entries.append(entry)
+
+	# Компактная полоса быстрого ремесла (Первая помощь / Алхимия)
 	var sep := HSeparator.new()
 	vbox.add_child(sep)
 
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	vbox.add_child(scroll)
+	var craft_row := HBoxContainer.new()
+	craft_row.add_theme_constant_override("separation", 4)
+	vbox.add_child(craft_row)
 
-	inv_items_vbox = VBoxContainer.new()
-	inv_items_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	inv_items_vbox.add_theme_constant_override("separation", 4)
-	scroll.add_child(inv_items_vbox)
+	for rec in [
+		{"id": "bandage", "label": "Бинт", "tip": "[color=#1eff00][b]Рецепт: Травяной бинт x2[/b][/color]\nТребуется: 2x Мироцвет\nВосстанавливает 80 ед. здоровья."},
+		{"id": "potion", "label": "Зелье", "tip": "[color=#1eff00][b]Рецепт: Добротное зелье[/b][/color]\nТребуется: 1x Мироцвет + 1x Сребролист\nВосстанавливает 95 ед. здоровья."},
+		{"id": "elixir", "label": "Эликсир", "tip": "[color=#1eff00][b]Рецепт: Эликсир стойкости[/b][/color]\nТребуется: 1x Сребролист + 1x Лазурный кристалл\n+25 макс. здоровья и +15% к урону на 60 сек."},
+	]:
+		var cb := Button.new()
+		cb.text = String(rec["label"])
+		cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		cb.custom_minimum_size = Vector2(0, 24)
+		cb.focus_mode = Control.FOCUS_NONE
+		cb.add_theme_font_size_override("font_size", 11)
+		var rid: String = String(rec["id"])
+		var rtip: String = String(rec["tip"])
+		cb.pressed.connect(func() -> void: GameState.craft_recipe(rid))
+		cb.mouse_entered.connect(func() -> void: _show_wow_tooltip(rtip, cb))
+		cb.mouse_exited.connect(_hide_wow_tooltip)
+		craft_row.add_child(cb)
+
+	# Классическая нижняя полоса монет с золотыми, серебряными и медными кружками
+	var coin_panel := PanelContainer.new()
+	coin_panel.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.06, 0.055, 0.05, 0.96), Color(0.42, 0.35, 0.22, 0.92), 1, 2))
+	vbox.add_child(coin_panel)
+
+	bag_coin_ctrl = WowDrawControl.new(func(c: Control) -> void:
+		WowUIArt.draw_coin_strip(c, Rect2(Vector2.ZERO, c.size), GameState.money_copper)
+	)
+	bag_coin_ctrl.custom_minimum_size = Vector2(214, 22)
+	coin_panel.add_child(bag_coin_ctrl)
 
 
 func _build_char_window() -> void:
 	char_window = PanelContainer.new()
-	char_window.position = Vector2(16, 184)
-	char_window.custom_minimum_size = Vector2(325, 320)
-	char_window.add_theme_stylebox_override("panel", _make_panel_style())
+	char_window.position = Vector2(14, 150)
+	char_window.custom_minimum_size = Vector2(346, 368)
+	char_window.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.09, 0.085, 0.11, 0.96), Color(0.70, 0.58, 0.30, 0.98), 2, 8))
 	char_window.visible = false
 	root_control.add_child(char_window)
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 8)
+	vbox.add_theme_constant_override("separation", 6)
 	char_window.add_child(vbox)
 
 	var trow := HBoxContainer.new()
 	vbox.add_child(trow)
 	var title := Label.new()
-	title.text = "Характеристики героя [C]"
+	title.text = "Персонаж [C]"
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_font_size_override("font_size", 15)
 	title.modulate = Color(1.0, 0.86, 0.38)
 	trow.add_child(title)
 	var xbtn := Button.new()
 	xbtn.text = "X"
-	xbtn.pressed.connect(func() -> void: char_window.visible = false)
+	xbtn.focus_mode = Control.FOCUS_NONE
+	xbtn.pressed.connect(func() -> void:
+		char_window.visible = false
+		_hide_wow_tooltip()
+	)
 	trow.add_child(xbtn)
+
+	# Бумажная кукла (Paperdoll) со слотами Брони и Оружия слева и справа (как в WoW)
+	var doll_row := HBoxContainer.new()
+	doll_row.add_theme_constant_override("separation", 10)
+	doll_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_child(doll_row)
+
+	var left_col := VBoxContainer.new()
+	left_col.alignment = BoxContainer.ALIGNMENT_CENTER
+	left_col.add_theme_constant_override("separation", 4)
+	doll_row.add_child(left_col)
+
+	char_armor_slot_panel = PanelContainer.new()
+	char_armor_slot_panel.custom_minimum_size = Vector2(50, 50)
+	char_armor_slot_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	left_col.add_child(char_armor_slot_panel)
+	char_armor_icon = WowDrawControl.new(func(c: Control) -> void:
+		WowUIArt.draw_item_icon(c, Rect2(Vector2.ZERO, c.size), {
+			"id": GameState.equipped_armor_id, "type": "armor", "rarity": GameState.equipped_armor_rarity
+		}, GameState.player_class)
+	)
+	char_armor_icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+	char_armor_slot_panel.add_child(char_armor_icon)
+	char_armor_slot_panel.mouse_entered.connect(func() -> void:
+		_show_wow_tooltip(WowUIArt.format_item_tooltip({
+			"id": GameState.equipped_armor_id, "name": GameState.equipped_armor_name,
+			"type": "armor", "bonus": GameState.equipped_armor_hp_bonus, "rarity": GameState.equipped_armor_rarity,
+		}, 0, false, false), char_armor_slot_panel)
+	)
+	char_armor_slot_panel.mouse_exited.connect(_hide_wow_tooltip)
+
+	var arm_lbl := Label.new()
+	arm_lbl.text = "Доспех"
+	arm_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	arm_lbl.add_theme_font_size_override("font_size", 10)
+	arm_lbl.modulate = Color(0.78, 0.80, 0.86)
+	left_col.add_child(arm_lbl)
+
+	char_doll_hero = WowDrawControl.new(func(c: Control) -> void:
+		WowUIArt.draw_paperdoll_hero(c, Rect2(Vector2.ZERO, c.size), GameState.player_class, GameState.get_armor_visual_tier(), GameState.get_weapon_visual_id())
+	)
+	char_doll_hero.custom_minimum_size = Vector2(148, 120)
+	doll_row.add_child(char_doll_hero)
+
+	var right_col := VBoxContainer.new()
+	right_col.alignment = BoxContainer.ALIGNMENT_CENTER
+	right_col.add_theme_constant_override("separation", 4)
+	doll_row.add_child(right_col)
+
+	char_weapon_slot_panel = PanelContainer.new()
+	char_weapon_slot_panel.custom_minimum_size = Vector2(50, 50)
+	char_weapon_slot_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	right_col.add_child(char_weapon_slot_panel)
+	char_weapon_icon = WowDrawControl.new(func(c: Control) -> void:
+		WowUIArt.draw_item_icon(c, Rect2(Vector2.ZERO, c.size), {
+			"id": GameState.equipped_weapon_id, "type": "weapon", "rarity": GameState.equipped_weapon_rarity
+		}, GameState.player_class)
+	)
+	char_weapon_icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+	char_weapon_slot_panel.add_child(char_weapon_icon)
+	char_weapon_slot_panel.mouse_entered.connect(func() -> void:
+		_show_wow_tooltip(WowUIArt.format_item_tooltip({
+			"id": GameState.equipped_weapon_id, "name": GameState.equipped_weapon_name,
+			"type": "weapon", "bonus": GameState.equipped_weapon_bonus, "rarity": GameState.equipped_weapon_rarity,
+		}, 0, false, false), char_weapon_slot_panel)
+	)
+	char_weapon_slot_panel.mouse_exited.connect(_hide_wow_tooltip)
+
+	var wep_lbl := Label.new()
+	wep_lbl.text = "Оружие"
+	wep_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	wep_lbl.add_theme_font_size_override("font_size", 10)
+	wep_lbl.modulate = Color(0.78, 0.80, 0.86)
+	right_col.add_child(wep_lbl)
+
+	var stats_box := PanelContainer.new()
+	stats_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	stats_box.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.055, 0.055, 0.075, 0.92), Color(0.45, 0.38, 0.22, 0.85), 1, 6))
+	vbox.add_child(stats_box)
 
 	char_stats_rtl = RichTextLabel.new()
 	char_stats_rtl.bbcode_enabled = true
+	char_stats_rtl.fit_content = false
+	char_stats_rtl.scroll_active = false
 	char_stats_rtl.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	char_stats_rtl.add_theme_font_size_override("normal_font_size", 13)
-	vbox.add_child(char_stats_rtl)
+	char_stats_rtl.add_theme_font_size_override("normal_font_size", 12)
+	stats_box.add_child(char_stats_rtl)
 
 
 func _build_questlog_window() -> void:
@@ -1506,9 +1880,10 @@ func _try_resurrect_healer() -> void:
 func _refresh_player_frame() -> void:
 	if _built_action_class != GameState.player_class:
 		_populate_action_buttons()
-	if player_icon_lbl:
-		player_icon_lbl.text = _class_glyph(GameState.player_class)
-	player_level_lbl.text = "Ур. %d" % GameState.level
+	if player_portrait_ctrl:
+		player_portrait_ctrl.queue_redraw()
+	if player_lvl_badge:
+		player_lvl_badge.text = "%d" % GameState.level
 	player_name_lbl.text = "%s (%s)" % [GameState.player_name, GameState.player_class_name]
 	_refresh_pet_frame()
 
@@ -1536,38 +1911,51 @@ func _refresh_player_frame() -> void:
 	var pct: int = int(round((float(GameState.xp) / maxf(1.0, float(GameState.xp_to_next))) * 100.0))
 	xp_lbl.text = "Опыт: %d / %d (%d%%) — Ур. %d" % [GameState.xp, GameState.xp_to_next, pct, GameState.level]
 
-	money_lbl.text = "Золото: %s" % GameState.format_money(GameState.money_copper)
+	if br_coin_ctrl:
+		br_coin_ctrl.queue_redraw()
+	if bag_coin_ctrl:
+		bag_coin_ctrl.queue_redraw()
 	if talent_btn:
 		if GameState.talent_points > 0:
-			talent_btn.text = "[T] Таланты (%d)" % GameState.talent_points
+			talent_btn.text = "T+"
 			talent_btn.modulate = Color(1.0, 0.92, 0.35)
 		else:
-			talent_btn.text = "[T] Таланты"
+			talent_btn.text = "T"
 			talent_btn.modulate = Color.WHITE
 	if char_window and char_window.visible:
 		_refresh_char_window()
 
 
-func _add_buff_chip(text_str: String, bg: Color, fg: Color) -> void:
+func _add_buff_icon(icon_key: String, secs: int, tip: String, border_col: Color) -> void:
 	if buff_row == null:
 		return
-	var p := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.border_color = fg
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(3)
-	sb.content_margin_left = 4
-	sb.content_margin_right = 4
-	sb.content_margin_top = 1
-	sb.content_margin_bottom = 1
-	p.add_theme_stylebox_override("panel", sb)
-	var l := Label.new()
-	l.text = text_str
-	l.add_theme_font_size_override("font_size", 10)
-	l.modulate = fg
-	p.add_child(l)
-	buff_row.add_child(p)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 1)
+	vb.mouse_filter = Control.MOUSE_FILTER_STOP
+	vb.mouse_entered.connect(func() -> void: _show_wow_tooltip(tip, vb))
+	vb.mouse_exited.connect(_hide_wow_tooltip)
+
+	var sq := PanelContainer.new()
+	sq.custom_minimum_size = Vector2(28, 28)
+	sq.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sq.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(Color(0.08, 0.08, 0.10, 0.96), border_col, 1, 2))
+	vb.add_child(sq)
+
+	var art := WowDrawControl.new(func(c: Control) -> void:
+		WowUIArt.draw_ability_icon(c, Rect2(Vector2.ZERO, c.size), icon_key, GameState.player_class)
+	)
+	art.set_anchors_preset(Control.PRESET_FULL_RECT)
+	sq.add_child(art)
+
+	var tm := Label.new()
+	tm.text = ("%dс" % secs) if secs > 0 else "∞"
+	tm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	tm.add_theme_font_size_override("font_size", 10)
+	tm.add_theme_color_override("font_outline_color", Color.BLACK)
+	tm.add_theme_constant_override("outline_size", 3)
+	tm.modulate = Color(1.0, 0.92, 0.38)
+	vb.add_child(tm)
+	buff_row.add_child(vb)
 
 
 func _rebuild_buff_icons() -> void:
@@ -1576,13 +1964,13 @@ func _rebuild_buff_icons() -> void:
 	for c in buff_row.get_children():
 		c.queue_free()
 	if GameState.battle_shout_timer > 0.0:
-		_add_buff_chip("Крик +25%% (%dс)" % int(ceil(GameState.battle_shout_timer)), Color(0.28, 0.16, 0.04, 0.9), Color(1.0, 0.85, 0.25))
+		_add_buff_icon("battle_shout", int(ceil(GameState.battle_shout_timer)), "[color=#ffd866][b]Боевой крик[/b][/color]\n+25% к урону оружия.", Color(0.95, 0.78, 0.24))
 	if GameState.elixir_timer > 0.0:
-		_add_buff_chip("Эликсир (%dс)" % int(ceil(GameState.elixir_timer)), Color(0.10, 0.28, 0.14, 0.9), Color(0.55, 1.0, 0.58))
+		_add_buff_icon("__item_util", int(ceil(GameState.elixir_timer)), "[color=#1eff00][b]Эликсир стойкости[/b][/color]\n+25 к макс. здоровью и +15% к урону.", Color(0.35, 0.96, 0.42))
 	if GameState.is_stealthed:
-		_add_buff_chip("Скрытность", Color(0.14, 0.14, 0.24, 0.9), Color(0.75, 0.82, 1.0))
+		_add_buff_icon("stealth", 0, "[color=#99b3ff][b]Незаметность[/b][/color]\nВы скрыты в тенях.", Color(0.55, 0.68, 0.98))
 	if GameState.pet_frenzy_timer > 0.0 and GameState.player_class == "hunter":
-		_add_buff_chip("Зов стаи (%dс)" % int(ceil(GameState.pet_frenzy_timer)), Color(0.24, 0.18, 0.06, 0.9), Color(0.68, 1.0, 0.45))
+		_add_buff_icon("mend_pet", int(ceil(GameState.pet_frenzy_timer)), "[color=#88ee66][b]Зов стаи[/b][/color]\nПитомец наносит +25% урона.", Color(0.45, 0.96, 0.42))
 
 
 func _refresh_pet_frame() -> void:
@@ -1592,14 +1980,16 @@ func _refresh_pet_frame() -> void:
 	pet_frame.visible = show_pet
 	if not show_pet:
 		return
+	if pet_portrait_ctrl:
+		pet_portrait_ctrl.queue_redraw()
 	pet_hp_bar.max_value = GameState.pet_max_hp
 	pet_hp_bar.value = GameState.pet_hp
 	if GameState.pet_dead:
-		pet_name_lbl.text = "Спутник: Лесной страж (Пал — [5])"
+		pet_name_lbl.text = "Лесной страж (Пал — [5])"
 		pet_name_lbl.modulate = Color(0.78, 0.42, 0.38)
 		pet_hp_lbl.text = "0 / %d" % GameState.pet_max_hp
 	else:
-		pet_name_lbl.text = "Спутник: Лесной страж"
+		pet_name_lbl.text = "Лесной страж"
 		pet_name_lbl.modulate = Color(0.55, 0.96, 0.58)
 		pet_hp_lbl.text = "%d / %d" % [GameState.pet_hp, GameState.pet_max_hp]
 
@@ -1615,21 +2005,27 @@ func _update_target_frame() -> void:
 		return
 
 	target_frame.visible = true
+	if target_portrait_ctrl:
+		target_portrait_ctrl.queue_redraw()
 	var p: Node3D = GameState.player_node
 	var dist: float = p.global_position.distance_to(t.global_position) if is_instance_valid(p) else 0.0
-	target_dist_lbl.text = "Дистанция: %.1f м" % dist
+	target_dist_lbl.text = "Дист: %.1f м" % dist
 	target_combo_lbl.visible = false
 	target_cast_bar.visible = false
 
+	var hdr_bg := Color(0.36, 0.10, 0.10, 0.88)
 	if t is MobEntity:
 		var mob := t as MobEntity
 		target_name_lbl.text = mob.mob_title
-		target_name_lbl.modulate = Color(1.0, 0.55, 0.25) if mob.is_elite else Color(0.98, 0.42, 0.38)
-		target_level_lbl.text = ("★ Элита Ур.%d" % mob.level) if mob.is_elite else ("Ур. %d" % mob.level)
-		target_level_lbl.modulate = Color(1.0, 0.85, 0.30) if mob.is_elite else Color(0.9, 0.9, 0.9)
+		target_name_lbl.modulate = Color(1.0, 0.88, 0.42) if mob.is_elite else Color(1.0, 0.92, 0.90)
+		target_level_lbl.text = "★ Элита" if mob.is_elite else ""
+		target_level_lbl.modulate = Color(1.0, 0.85, 0.30)
+		if target_lvl_badge:
+			target_lvl_badge.text = "%d" % mob.level
 		target_hp_bar.max_value = mob.max_hp
 		target_hp_bar.value = mob.hp
 		target_hp_lbl.text = "Труп" if mob.is_dead() else "%d / %d" % [mob.hp, mob.max_hp]
+		hdr_bg = Color(0.20, 0.20, 0.22, 0.85) if mob.is_dead() else Color(0.42, 0.10, 0.10, 0.92)
 		target_hp_bar.add_theme_stylebox_override("fill", _make_bar_style(Color(0.45, 0.45, 0.45) if mob.is_dead() else Color(0.76, 0.18, 0.16)))
 		if not mob.is_dead() and mob.cast_display_name != "":
 			target_cast_bar.visible = true
@@ -1641,9 +2037,12 @@ func _update_target_frame() -> void:
 			target_combo_lbl.text = "★".repeat(pts) + "☆".repeat(GameState.max_combo_points - pts)
 	elif t is PetCompanion:
 		target_name_lbl.text = "Лесной страж"
-		target_name_lbl.modulate = Color(0.45, 0.96, 0.55)
+		target_name_lbl.modulate = Color(0.88, 1.0, 0.88)
 		target_level_lbl.text = "Спутник"
-		target_level_lbl.modulate = Color(0.45, 0.96, 0.55)
+		target_level_lbl.modulate = Color(0.55, 0.96, 0.58)
+		if target_lvl_badge:
+			target_lvl_badge.text = "%d" % GameState.level
+		hdr_bg = Color(0.10, 0.32, 0.14, 0.90)
 		target_hp_bar.max_value = GameState.pet_max_hp
 		target_hp_bar.value = GameState.pet_hp
 		target_hp_lbl.text = "Пал" if GameState.pet_dead else "%d / %d" % [GameState.pet_hp, GameState.pet_max_hp]
@@ -1651,9 +2050,12 @@ func _update_target_frame() -> void:
 	elif t is QuestNPC:
 		var npc := t as QuestNPC
 		target_name_lbl.text = npc.npc_name
-		target_name_lbl.modulate = Color(0.40, 0.96, 0.45)
+		target_name_lbl.modulate = Color(0.90, 1.0, 0.90)
 		target_level_lbl.text = "Торговец" if npc.role == "merchant" else ("Стража" if npc.role == "patrol" else "Друг")
-		target_level_lbl.modulate = Color(0.40, 0.96, 0.45)
+		target_level_lbl.modulate = Color(0.55, 0.96, 0.58)
+		if target_lvl_badge:
+			target_lvl_badge.text = "5"
+		hdr_bg = Color(0.10, 0.34, 0.14, 0.90)
 		target_hp_bar.max_value = 100
 		target_hp_bar.value = 100
 		target_hp_lbl.text = "100 / 100"
@@ -1661,13 +2063,18 @@ func _update_target_frame() -> void:
 	elif t is InteractableProp:
 		var prop := t as InteractableProp
 		target_name_lbl.text = prop.prop_title
-		target_name_lbl.modulate = Color(0.55, 0.92, 1.0) if prop.prop_id == "ore_vein" else (Color(0.55, 1.0, 0.55) if prop.prop_id == "herb_node" else Color(1.0, 0.88, 0.35))
+		target_name_lbl.modulate = Color(0.96, 0.94, 0.78)
 		target_level_lbl.text = "Жила" if prop.prop_id == "ore_vein" else ("Трава" if prop.prop_id == "herb_node" else "Объект")
-		target_level_lbl.modulate = target_name_lbl.modulate
+		target_level_lbl.modulate = Color(1.0, 0.88, 0.42)
+		if target_lvl_badge:
+			target_lvl_badge.text = "*"
+		hdr_bg = Color(0.32, 0.26, 0.08, 0.90)
 		target_hp_bar.max_value = 100
 		target_hp_bar.value = 100
 		target_hp_lbl.text = "[F / ПКМ]"
 		target_hp_bar.add_theme_stylebox_override("fill", _make_bar_style(Color(0.78, 0.62, 0.20)))
+	if target_name_hdr:
+		target_name_hdr.add_theme_stylebox_override("panel", WowUIArt.make_wow_panel_style(hdr_bg, Color(0.48, 0.38, 0.22, 0.8), 1, 2))
 
 
 func _update_action_bar() -> void:
@@ -1695,22 +2102,22 @@ func _update_action_bar() -> void:
 
 		if slot == 1:
 			var active: bool = p != null and p.auto_attack_enabled
-			btn.modulate = Color(1.15, 1.05, 0.55) if active else Color.WHITE
-			sub_lbl.text = "АКТИВ." if active else ("Посох" if GameState.player_class == "mage" else ("Кинжалы" if GameState.player_class == "rogue" else ("Лук" if GameState.player_class == "hunter" else "Меч")))
+			btn.modulate = Color(1.22, 1.10, 0.55) if active else Color.WHITE
+			sub_lbl.text = "АКТ" if active else ""
 			continue
 		if slot == 6:
 			var cnt_hp: int = GameState.get_item_count_by_types(["potion", "bandage"])
-			sub_lbl.text = "x%d" % cnt_hp
+			sub_lbl.text = "%d" % cnt_hp
 			cd_dim.visible = cnt_hp <= 0
 			cd_lbl.visible = false
-			btn.modulate = Color(0.65, 0.65, 0.68) if cnt_hp <= 0 else Color(0.88, 1.08, 0.88)
+			btn.modulate = Color(0.55, 0.55, 0.58) if cnt_hp <= 0 else Color.WHITE
 			continue
 		if slot == 7:
 			var cnt_util: int = GameState.get_item_count_by_types(["elixir", "mana_potion", "food"])
-			sub_lbl.text = "x%d" % cnt_util
+			sub_lbl.text = "%d" % cnt_util
 			cd_dim.visible = cnt_util <= 0
 			cd_lbl.visible = false
-			btn.modulate = Color(0.65, 0.65, 0.68) if cnt_util <= 0 else Color(0.88, 0.96, 1.1)
+			btn.modulate = Color(0.55, 0.55, 0.58) if cnt_util <= 0 else Color.WHITE
 			continue
 
 		var cd_rem: float = float(GameState.ability_cooldowns.get(cd_key, 0.0))
@@ -1723,14 +2130,28 @@ func _update_action_bar() -> void:
 			cd_dim.visible = false
 			cd_lbl.visible = false
 			if GameState.player_class == "rogue" and slot == 4 and GameState.is_stealthed:
-				btn.modulate = Color(0.75, 0.95, 1.15)
-				sub_lbl.text = "АКТИВ."
+				btn.modulate = Color(0.75, 0.98, 1.2)
+				sub_lbl.text = "АКТ"
 			else:
-				sub_lbl.text = cfg["sub"]
+				sub_lbl.text = ""
 				if rage_cost > 0 and GameState.rage < rage_cost:
-					btn.modulate = Color(0.65, 0.55, 0.55)
+					btn.modulate = Color(0.58, 0.52, 0.52)
 				else:
 					btn.modulate = Color.WHITE
+
+	if inventory_window and inventory_window.visible:
+		var hs_cd: float = float(GameState.ability_cooldowns.get("hearthstone", 0.0))
+		for s_entry in bag_slot_entries:
+			var it: Dictionary = s_entry["item"]
+			var dim_c: ColorRect = s_entry["cd_dim"]
+			var cdl: Label = s_entry["cd_lbl"]
+			if not it.is_empty() and String(it.get("type", "")) == "hearthstone" and hs_cd > 0.0:
+				dim_c.visible = true
+				cdl.visible = true
+				cdl.text = "%.0f" % ceil(hs_cd)
+			else:
+				dim_c.visible = false
+				cdl.visible = false
 
 
 func _update_zone_label() -> void:
@@ -2119,6 +2540,7 @@ func _open_loot_window(mob_ref: Node3D) -> void:
 
 
 func _rebuild_loot_list() -> void:
+	_hide_wow_tooltip()
 	for child in loot_list_vbox.get_children():
 		child.queue_free()
 
@@ -2128,8 +2550,9 @@ func _rebuild_loot_list() -> void:
 
 	if active_loot_mob.loot_copper > 0:
 		var money_btn := Button.new()
-		money_btn.text = "Монеты: %s" % GameState.format_money(active_loot_mob.loot_copper)
+		money_btn.text = "Золото / монеты: %s" % GameState.format_money(active_loot_mob.loot_copper)
 		money_btn.modulate = Color(1.0, 0.88, 0.38)
+		money_btn.focus_mode = Control.FOCUS_NONE
 		money_btn.pressed.connect(func() -> void:
 			if is_instance_valid(active_loot_mob) and active_loot_mob.loot_copper > 0:
 				GameState.add_money(active_loot_mob.loot_copper)
@@ -2141,12 +2564,31 @@ func _rebuild_loot_list() -> void:
 
 	for idx in range(active_loot_mob.loot_items.size()):
 		var item: Dictionary = active_loot_mob.loot_items[idx]
+		var rar: String = String(item.get("rarity", "common"))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		loot_list_vbox.add_child(row)
+
+		var ic_box := PanelContainer.new()
+		ic_box.custom_minimum_size = Vector2(36, 36)
+		ic_box.add_theme_stylebox_override("panel", WowUIArt.make_slot_box_style(rar, false, false, false))
+		row.add_child(ic_box)
+
+		var ic_art := WowDrawControl.new(func(c: Control) -> void:
+			WowUIArt.draw_item_icon(c, Rect2(Vector2.ZERO, c.size), item, GameState.player_class)
+		)
+		ic_art.set_anchors_preset(Control.PRESET_FULL_RECT)
+		ic_box.add_child(ic_art)
+
 		var item_btn := Button.new()
 		var cnt: int = int(item.get("count", 1))
 		item_btn.text = "%s%s" % [item["name"], (" x%d" % cnt) if cnt > 1 else ""]
-		item_btn.tooltip_text = String(item.get("desc", ""))
-		item_btn.modulate = _rarity_color(String(item.get("rarity", "common")))
+		item_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		item_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		item_btn.focus_mode = Control.FOCUS_NONE
+		item_btn.modulate = _rarity_color(rar)
 		var cap_idx: int = idx
+		var cap_item: Dictionary = item
 		item_btn.pressed.connect(func() -> void:
 			if is_instance_valid(active_loot_mob) and cap_idx < active_loot_mob.loot_items.size():
 				var picked: Dictionary = active_loot_mob.loot_items[cap_idx]
@@ -2155,10 +2597,15 @@ func _rebuild_loot_list() -> void:
 				active_loot_mob.refresh_loot_indicator()
 				_rebuild_loot_list()
 		)
-		loot_list_vbox.add_child(item_btn)
+		item_btn.mouse_entered.connect(func() -> void:
+			_show_wow_tooltip(WowUIArt.format_item_tooltip(cap_item, GameState.get_item_sell_price(cap_item), false, false), item_btn)
+		)
+		item_btn.mouse_exited.connect(_hide_wow_tooltip)
+		row.add_child(item_btn)
 
 
 func _take_all_loot() -> void:
+	_hide_wow_tooltip()
 	if not is_instance_valid(active_loot_mob):
 		loot_window.visible = false
 		return
@@ -2174,71 +2621,108 @@ func _take_all_loot() -> void:
 
 func _toggle_inventory() -> void:
 	inventory_window.visible = not inventory_window.visible
+	picked_bag_slot = -1
+	_hide_wow_tooltip()
 	if inventory_window.visible:
 		_refresh_inventory_window()
 
 
+func _on_bag_slot_hover(slot_idx: int, inside: bool) -> void:
+	if slot_idx < 0 or slot_idx >= bag_slot_entries.size():
+		return
+	var entry: Dictionary = bag_slot_entries[slot_idx]
+	entry["hovered"] = inside
+	var it: Dictionary = entry["item"]
+	var p: PanelContainer = entry["panel"]
+	p.add_theme_stylebox_override("panel", WowUIArt.make_slot_box_style(
+		String(it.get("rarity", "common")), it.is_empty(), picked_bag_slot == slot_idx, inside
+	))
+	if inside and not it.is_empty():
+		var v_open: bool = vendor_window != null and vendor_window.visible
+		_show_wow_tooltip(WowUIArt.format_item_tooltip(it, GameState.get_item_sell_price(it), v_open, true), p)
+	else:
+		_hide_wow_tooltip()
+
+
+func _on_bag_slot_gui_input(slot_idx: int, event: InputEvent) -> void:
+	if not (event is InputEventMouseButton):
+		return
+	var mb := event as InputEventMouseButton
+	if not mb.pressed:
+		return
+	if slot_idx < 0 or slot_idx >= bag_slot_entries.size():
+		return
+	var entry: Dictionary = bag_slot_entries[slot_idx]
+	var inv_idx: int = int(entry["inv_index"])
+	var it: Dictionary = entry["item"]
+
+	if mb.button_index == MOUSE_BUTTON_LEFT:
+		if mb.double_click and inv_idx >= 0:
+			picked_bag_slot = -1
+			_hide_wow_tooltip()
+			GameState.use_or_equip_item(inv_idx)
+			get_viewport().set_input_as_handled()
+			return
+		if picked_bag_slot >= 0:
+			var src: int = picked_bag_slot
+			picked_bag_slot = -1
+			if src != slot_idx:
+				GameState.move_or_swap_bag_slot(src, slot_idx)
+			else:
+				_refresh_inventory_window()
+		elif inv_idx >= 0:
+			picked_bag_slot = slot_idx
+			AudioManager.play("ui_click")
+			_refresh_inventory_window()
+		get_viewport().set_input_as_handled()
+	elif mb.button_index == MOUSE_BUTTON_RIGHT:
+		if picked_bag_slot >= 0:
+			picked_bag_slot = -1
+			_refresh_inventory_window()
+		elif inv_idx >= 0:
+			_hide_wow_tooltip()
+			if vendor_window != null and vendor_window.visible and GameState.get_item_sell_price(it) > 0:
+				GameState.sell_item_at(inv_idx)
+				_refresh_vendor_money()
+				_refresh_vendor_sell_list()
+			else:
+				GameState.use_or_equip_item(inv_idx)
+		get_viewport().set_input_as_handled()
+
+
 func _refresh_inventory_window() -> void:
-	if inv_gear_lbl == null or inv_items_vbox == null:
+	var slots: Array[Dictionary] = GameState.get_bag_slots()
+	var used_cnt: int = mini(GameState.BAG_CAPACITY, GameState.inventory.size())
+	if bag_title_lbl:
+		bag_title_lbl.text = "Рюкзак (%d/%d)" % [used_cnt, GameState.BAG_CAPACITY]
+	if br_bag_count_lbl:
+		br_bag_count_lbl.text = "Рюкзак %d/%d" % [used_cnt, GameState.BAG_CAPACITY]
+	if bag_pickup_hint_lbl:
+		bag_pickup_hint_lbl.visible = picked_bag_slot >= 0
+	if bag_coin_ctrl:
+		bag_coin_ctrl.queue_redraw()
+	if br_coin_ctrl:
+		br_coin_ctrl.queue_redraw()
+
+	if bag_slot_entries.size() < GameState.BAG_CAPACITY:
 		return
+	for slot_i in range(GameState.BAG_CAPACITY):
+		var entry: Dictionary = bag_slot_entries[slot_i]
+		var slot_data: Dictionary = slots[slot_i]
+		var it: Dictionary = slot_data.get("item", {}) if not slot_data.is_empty() else {}
+		entry["item"] = it
+		entry["inv_index"] = int(slot_data.get("inv_index", -1)) if not slot_data.is_empty() else -1
+		var p: PanelContainer = entry["panel"]
+		var ic: Control = entry["icon_ctrl"]
+		var clbl: Label = entry["count_lbl"]
+		var hov: bool = bool(entry.get("hovered", false))
+		p.add_theme_stylebox_override("panel", WowUIArt.make_slot_box_style(
+			String(it.get("rarity", "common")), it.is_empty(), picked_bag_slot == slot_i, hov
+		))
+		ic.queue_redraw()
+		var cnt: int = int(it.get("count", 1))
+		clbl.text = str(cnt) if (not it.is_empty() and cnt > 1) else ""
 
-	var dmg_min: int = GameState.base_damage_min + GameState.equipped_weapon_bonus
-	var dmg_max: int = GameState.base_damage_max + GameState.equipped_weapon_bonus
-	var wep_col: String = _rarity_color(GameState.equipped_weapon_rarity).to_html(false)
-	var arm_col: String = _rarity_color(GameState.equipped_armor_rarity).to_html(false)
-
-	inv_gear_lbl.text = "[b]Экипировка:[/b]\n" + \
-		"Оружие: [color=#%s][%s][/color] (+%d ур.)\n" % [wep_col, GameState.equipped_weapon_name, GameState.equipped_weapon_bonus] + \
-		"Броня: [color=#%s][%s][/color] (+%d HP)\n" % [arm_col, GameState.equipped_armor_name, GameState.equipped_armor_hp_bonus] + \
-		"Урон: [color=#ffd866]%d — %d[/color] | Здоровье: [color=#66ee66]%d[/color]" % [dmg_min, dmg_max, GameState.max_hp]
-
-	for child in inv_items_vbox.get_children():
-		child.queue_free()
-
-	if GameState.inventory.is_empty():
-		var empty_lbl := Label.new()
-		empty_lbl.text = "Сумка пуста."
-		empty_lbl.modulate = Color(0.65, 0.65, 0.68)
-		inv_items_vbox.add_child(empty_lbl)
-		return
-
-	for i in range(GameState.inventory.size()):
-		var item: Dictionary = GameState.inventory[i]
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 6)
-		inv_items_vbox.add_child(row)
-
-		var lbl := Label.new()
-		var cnt: int = int(item.get("count", 1))
-		lbl.text = "%s%s" % [item["name"], (" x%d" % cnt) if cnt > 1 else ""]
-		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		lbl.modulate = _rarity_color(String(item.get("rarity", "common")))
-		lbl.tooltip_text = String(item.get("desc", ""))
-		row.add_child(lbl)
-
-		var act_btn := Button.new()
-		var itype: String = String(item.get("type", "junk"))
-		if itype == "potion" or itype == "mana_potion" or itype == "elixir":
-			act_btn.text = "Выпить"
-		elif itype == "bandage":
-			act_btn.text = "Перевяз."
-		elif itype == "hearthstone":
-			act_btn.text = "Портал"
-		elif itype == "food":
-			act_btn.text = "Съесть"
-		elif itype == "weapon" or itype == "armor":
-			act_btn.text = "Надеть"
-		elif itype == "material":
-			act_btn.text = "Ресурс"
-			act_btn.disabled = true
-		else:
-			act_btn.text = "Продать"
-		act_btn.focus_mode = Control.FOCUS_NONE
-		var cap_i: int = i
-		act_btn.pressed.connect(func() -> void:
-			GameState.use_or_equip_item(cap_i)
-		)
-		row.add_child(act_btn)
 
 
 func _toggle_talents() -> void:
@@ -2306,22 +2790,28 @@ func _toggle_char_window() -> void:
 
 
 func _refresh_char_window() -> void:
+	if char_armor_slot_panel:
+		char_armor_slot_panel.add_theme_stylebox_override("panel", WowUIArt.make_slot_box_style(GameState.equipped_armor_rarity, false, false, false))
+	if char_weapon_slot_panel:
+		char_weapon_slot_panel.add_theme_stylebox_override("panel", WowUIArt.make_slot_box_style(GameState.equipped_weapon_rarity, false, false, false))
+	if char_armor_icon:
+		char_armor_icon.queue_redraw()
+	if char_weapon_icon:
+		char_weapon_icon.queue_redraw()
+	if char_doll_hero:
+		char_doll_hero.queue_redraw()
 	if char_stats_rtl == null:
 		return
 	var st: Dictionary = GameState.get_character_stats()
 	var wep_col: String = _rarity_color(GameState.equipped_weapon_rarity).to_html(false)
 	var arm_col: String = _rarity_color(GameState.equipped_armor_rarity).to_html(false)
-	char_stats_rtl.text = "[color=#ffd866][b]%s — %s (%d ур.)[/b][/color]\n" % [GameState.player_name, GameState.player_class_name, GameState.level] + \
-		"Здоровье: [color=#66ee66]%d / %d[/color]\n" % [GameState.hp, GameState.max_hp] + \
-		"[b]Характеристики:[/b]\n" + \
+	char_stats_rtl.text = "[color=#ffd866][b]%s — %s (%d ур.)[/b][/color]  |  ОЗ: [color=#66ee66]%d/%d[/color]\n" % [GameState.player_name, GameState.player_class_name, GameState.level, GameState.hp, GameState.max_hp] + \
 		"• Сила: [color=#ffe488]%d[/color]   • Ловкость: [color=#ffe488]%d[/color]\n" % [int(st["strength"]), int(st["agility"])] + \
-		"• Выносливость: [color=#ffe488]%d[/color]   • Интеллект: [color=#ffe488]%d[/color]\n" % [int(st["stamina"]), int(st["intellect"])] + \
+		"• Вынос.: [color=#ffe488]%d[/color]   • Интелл.: [color=#ffe488]%d[/color]\n" % [int(st["stamina"]), int(st["intellect"])] + \
 		"• Дух: [color=#ffe488]%d[/color]   • Броня: [color=#aaccff]%d[/color]\n" % [int(st["spirit"]), int(st["armor"])] + \
-		"• Урон: [color=#ffd866]%d — %d[/color]   • Крит: [color=#ff9955]%.1f%%[/color]\n" % [int(st["dmg_min"]), int(st["dmg_max"]), float(st["crit_pct"])] + \
-		"[b]Профессии:[/b]\n" + \
-		"• Горное дело: [color=#66d9ff]%d[/color]   • Травничество: [color=#77ee77]%d[/color]\n" % [GameState.mining_skill, GameState.herbalism_skill] + \
-		"[b]Надето:[/b]\n" + \
-		"• Оружие: [color=#%s][%s][/color]\n• Доспех: [color=#%s][%s][/color]" % [wep_col, GameState.equipped_weapon_name, arm_col, GameState.equipped_armor_name]
+		"• Урон: [color=#ffd866]%d–%d[/color]   • Крит: [color=#ff9955]%.1f%%[/color]\n" % [int(st["dmg_min"]), int(st["dmg_max"]), float(st["crit_pct"])] + \
+		"• Горн. дело: [color=#66d9ff]%d[/color]   • Травнич.: [color=#77ee77]%d[/color]\n" % [GameState.mining_skill, GameState.herbalism_skill] + \
+		"Оружие: [color=#%s][%s][/color]\nДоспех: [color=#%s][%s][/color]" % [wep_col, GameState.equipped_weapon_name, arm_col, GameState.equipped_armor_name]
 
 
 func _toggle_questlog() -> void:
@@ -2355,14 +2845,9 @@ func _refresh_questlog() -> void:
 func _toggle_mute() -> void:
 	var m: bool = AudioManager.toggle_mute()
 	if mute_btn:
-		mute_btn.text = "Звук: Выкл" if m else "Звук [N]"
+		mute_btn.text = "N×" if m else "N"
+		mute_btn.modulate = Color(0.62, 0.62, 0.66) if m else Color.WHITE
 
 
 func _rarity_color(rarity: String) -> Color:
-	match rarity:
-		"uncommon":
-			return Color(0.32, 0.96, 0.35)
-		"rare":
-			return Color(0.32, 0.66, 1.0)
-		_:
-			return Color(0.95, 0.95, 0.95)
+	return WowUIArt.get_rarity_color(rarity)

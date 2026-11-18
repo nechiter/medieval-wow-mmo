@@ -17,6 +17,7 @@ signal spirit_released
 signal player_resurrected(at_corpse: bool)
 
 const SAVE_PATH := "user://savegame.json"
+const BAG_CAPACITY := 16
 
 const COLOR_LOG_SYSTEM := Color(1.0, 0.85, 0.35)
 const COLOR_LOG_COMBAT_PLAYER := Color(1.0, 1.0, 1.0)
@@ -505,6 +506,7 @@ func _init_starting_inventory() -> void:
 			"desc": "Восстанавливает 55 ед. маны",
 			"count": 2,
 		})
+	_normalize_bag_slots()
 
 
 func get_class_talents() -> Array[Dictionary]:
@@ -951,6 +953,93 @@ func complete_quest(quest_id: String) -> void:
 	quest_updated.emit()
 
 
+func _find_free_bag_slot() -> int:
+	var used: Dictionary = {}
+	for it in inventory:
+		if it.has("bag_slot"):
+			used[int(it["bag_slot"])] = true
+	for s in range(BAG_CAPACITY):
+		if not used.has(s):
+			return s
+	var extra: int = BAG_CAPACITY
+	while used.has(extra):
+		extra += 1
+	return extra
+
+
+func _normalize_bag_slots() -> void:
+	var used: Dictionary = {}
+	for it in inventory:
+		var slot_v: int = int(it.get("bag_slot", -1))
+		if slot_v < 0 or used.has(slot_v):
+			var free_s: int = 0
+			while used.has(free_s):
+				free_s += 1
+			it["bag_slot"] = free_s
+			used[free_s] = true
+		else:
+			it["bag_slot"] = slot_v
+			used[slot_v] = true
+
+
+func get_bag_slots() -> Array[Dictionary]:
+	_normalize_bag_slots()
+	var out: Array[Dictionary] = []
+	for _i in range(BAG_CAPACITY):
+		out.append({})
+	for i in range(inventory.size()):
+		var it: Dictionary = inventory[i]
+		var s: int = int(it.get("bag_slot", i))
+		if s >= 0 and s < BAG_CAPACITY:
+			out[s] = {"inv_index": i, "item": it}
+	return out
+
+
+func move_or_swap_bag_slot(from_slot: int, to_slot: int) -> bool:
+	if from_slot == to_slot or from_slot < 0 or to_slot < 0 or from_slot >= BAG_CAPACITY or to_slot >= BAG_CAPACITY:
+		return false
+	_normalize_bag_slots()
+	var idx_a: int = -1
+	var idx_b: int = -1
+	for i in range(inventory.size()):
+		var s: int = int(inventory[i].get("bag_slot", -1))
+		if s == from_slot:
+			idx_a = i
+		elif s == to_slot:
+			idx_b = i
+	if idx_a < 0:
+		return false
+	inventory[idx_a]["bag_slot"] = to_slot
+	if idx_b >= 0:
+		inventory[idx_b]["bag_slot"] = from_slot
+	AudioManager.play("ui_click")
+	inventory_changed.emit()
+	return true
+
+
+func sort_backpack() -> void:
+	var prio: Dictionary = {
+		"hearthstone": 0, "potion": 1, "mana_potion": 2, "elixir": 3,
+		"bandage": 4, "food": 5, "weapon": 6, "armor": 7, "material": 8, "junk": 9,
+	}
+	var rar_p: Dictionary = {"rare": 0, "uncommon": 1, "common": 2, "poor": 3, "junk": 3}
+	inventory.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var pa: int = int(prio.get(String(a.get("type", "junk")), 9))
+		var pb: int = int(prio.get(String(b.get("type", "junk")), 9))
+		if pa != pb:
+			return pa < pb
+		var ra: int = int(rar_p.get(String(a.get("rarity", "common")), 2))
+		var rb: int = int(rar_p.get(String(b.get("rarity", "common")), 2))
+		if ra != rb:
+			return ra < rb
+		return String(a.get("name", "")) < String(b.get("name", ""))
+	)
+	for i in range(inventory.size()):
+		inventory[i]["bag_slot"] = i
+	AudioManager.play("ui_click")
+	inventory_changed.emit()
+
+
 func add_item_to_inventory(item: Dictionary) -> void:
 	var item_type: String = item.get("type", "junk")
 	var stackable: bool = item_type in ["potion", "mana_potion", "food", "junk", "material", "elixir", "bandage"]
@@ -966,6 +1055,7 @@ func add_item_to_inventory(item: Dictionary) -> void:
 	var copy: Dictionary = item.duplicate(true)
 	if not copy.has("count"):
 		copy["count"] = 1
+	copy["bag_slot"] = _find_free_bag_slot()
 	inventory.append(copy)
 	add_combat_log("Получен предмет: [%s]." % copy["name"], COLOR_LOG_LOOT)
 	inventory_changed.emit()
@@ -1198,6 +1288,7 @@ func use_or_equip_item(index: int) -> void:
 			inventory.remove_at(index)
 		inventory_changed.emit()
 	elif item_type == "weapon":
+		var slot_keep: int = int(item.get("bag_slot", index))
 		var old_weapon: Dictionary = {
 			"id": equipped_weapon_id,
 			"name": equipped_weapon_name,
@@ -1206,6 +1297,7 @@ func use_or_equip_item(index: int) -> void:
 			"rarity": equipped_weapon_rarity,
 			"desc": "+%d к урону оружия" % equipped_weapon_bonus,
 			"count": 1,
+			"bag_slot": slot_keep,
 		}
 		equipped_weapon_id = String(item.get("id", "custom_weapon"))
 		equipped_weapon_name = item["name"]
@@ -1220,6 +1312,7 @@ func use_or_equip_item(index: int) -> void:
 		equipment_changed.emit()
 		inventory_changed.emit()
 	elif item_type == "armor":
+		var slot_keep_a: int = int(item.get("bag_slot", index))
 		var old_armor: Dictionary = {
 			"id": equipped_armor_id,
 			"name": equipped_armor_name,
@@ -1228,6 +1321,7 @@ func use_or_equip_item(index: int) -> void:
 			"rarity": equipped_armor_rarity,
 			"desc": "+%d к макс. здоровью" % equipped_armor_hp_bonus,
 			"count": 1,
+			"bag_slot": slot_keep_a,
 		}
 		equipped_armor_id = String(item.get("id", "custom_armor"))
 		equipped_armor_name = item["name"]
@@ -1390,6 +1484,7 @@ func load_game() -> bool:
 		for it in d["inventory"]:
 			if it is Dictionary:
 				inventory.append((it as Dictionary).duplicate(true))
+	_normalize_bag_slots()
 
 	if d.get("quests") is Dictionary:
 		var qd: Dictionary = d["quests"]
