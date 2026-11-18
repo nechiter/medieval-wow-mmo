@@ -11,12 +11,16 @@ const DAGGER_INTERVAL := 1.3
 const MELEE_RANGE := 3.9
 const WAND_RANGE := 22.0
 const WAND_INTERVAL := 1.7
+const BOW_RANGE := 24.0
+const BOW_INTERVAL := 1.45
 const SPELL_RANGE := 30.0
 
 var casting_slot: int = 0
 var cast_timer: float = 0.0
 var cast_total: float = 0.0
 var cast_target: MobEntity = null
+var gather_target_prop: InteractableProp = null
+var step_accum: float = 0.0
 
 var rig_node: Node3D = null
 var camera_pivot: Node3D = null
@@ -74,6 +78,8 @@ func _ready() -> void:
 	GameState.player_resurrected.connect(_on_player_resurrected)
 	GameState.target_changed.connect(_on_target_changed)
 	GameState.player_stats_changed.connect(_refresh_transparency)
+	GameState.equipment_changed.connect(_on_equipment_changed)
+	_ensure_hunter_pet()
 
 
 func _build_collision() -> void:
@@ -87,49 +93,97 @@ func _build_collision() -> void:
 
 
 func _visual_config() -> Dictionary:
+	var tier: int = GameState.get_armor_visual_tier()
+	var w_vis: String = GameState.get_weapon_visual_id()
 	if GameState.player_class == "mage":
+		var m_col := Color(0.28, 0.24, 0.68) if tier >= 2 else (Color(0.24, 0.34, 0.66) if tier == 1 else Color(0.22, 0.28, 0.62))
 		return {
 			"scale": 1.05,
 			"archetype": "mage",
-			"armor_color": Color(0.22, 0.28, 0.62),
-			"accent_color": Color(0.85, 0.72, 0.30),
+			"armor_color": m_col,
+			"accent_color": Color(0.92, 0.78, 0.32) if tier >= 1 else Color(0.85, 0.72, 0.30),
 			"skin_color": Color(0.88, 0.70, 0.56),
 			"pants_color": Color(0.16, 0.18, 0.40),
-			"cape_color": Color(0.30, 0.20, 0.58),
+			"cape_color": Color(0.36, 0.16, 0.62) if tier >= 2 else Color(0.30, 0.20, 0.58),
 			"hair_color": Color(0.85, 0.85, 0.88),
 			"eye_color": Color(0.35, 0.70, 1.0),
-			"weapon_type": "staff",
+			"weapon_type": w_vis,
+			"armor_tier": tier,
 			"has_cape": true,
 		}
 	if GameState.player_class == "rogue":
+		var r_col := Color(0.24, 0.16, 0.22) if tier >= 2 else (Color(0.20, 0.22, 0.26) if tier == 1 else Color(0.18, 0.19, 0.23))
 		return {
 			"scale": 1.02,
 			"archetype": "rogue",
-			"armor_color": Color(0.18, 0.19, 0.23),
-			"accent_color": Color(0.65, 0.18, 0.18),
+			"armor_color": r_col,
+			"accent_color": Color(0.78, 0.22, 0.22) if tier >= 1 else Color(0.65, 0.18, 0.18),
 			"skin_color": Color(0.86, 0.69, 0.55),
 			"pants_color": Color(0.14, 0.14, 0.16),
-			"cape_color": Color(0.22, 0.10, 0.12),
+			"cape_color": Color(0.28, 0.10, 0.12),
 			"hair_color": Color(0.15, 0.12, 0.10),
 			"eye_color": Color(0.25, 0.85, 0.45),
-			"weapon_type": "dagger",
+			"weapon_type": w_vis,
+			"armor_tier": tier,
 			"has_cape": true,
-			"has_offhand_dagger": true,
+			"has_offhand_dagger": w_vis == "dagger",
 		}
+	if GameState.player_class == "hunter":
+		var h_col := Color(0.18, 0.44, 0.24) if tier >= 2 else (Color(0.22, 0.40, 0.22) if tier == 1 else Color(0.24, 0.36, 0.20))
+		return {
+			"scale": 1.04,
+			"archetype": "hunter",
+			"armor_color": h_col,
+			"accent_color": Color(0.82, 0.66, 0.24),
+			"skin_color": Color(0.87, 0.70, 0.56),
+			"pants_color": Color(0.22, 0.18, 0.14),
+			"cape_color": Color(0.16, 0.34, 0.16),
+			"hair_color": Color(0.42, 0.24, 0.12),
+			"eye_color": Color(0.25, 0.82, 0.38),
+			"weapon_type": w_vis,
+			"armor_tier": tier,
+			"has_cape": true,
+		}
+	var w_col := Color(0.38, 0.22, 0.26) if tier >= 2 else (Color(0.30, 0.40, 0.52) if tier == 1 else Color(0.28, 0.34, 0.44))
 	return {
 		"scale": 1.05,
 		"archetype": "warrior",
-		"armor_color": Color(0.28, 0.34, 0.44),
-		"accent_color": Color(0.78, 0.60, 0.22),
+		"armor_color": w_col,
+		"accent_color": Color(0.88, 0.70, 0.26) if tier >= 1 else Color(0.78, 0.60, 0.22),
 		"skin_color": Color(0.88, 0.70, 0.56),
 		"pants_color": Color(0.20, 0.18, 0.17),
-		"cape_color": Color(0.62, 0.12, 0.12),
+		"cape_color": Color(0.68, 0.12, 0.12),
 		"hair_color": Color(0.28, 0.17, 0.10),
 		"eye_color": Color(0.16, 0.36, 0.65),
-		"weapon_type": "greatsword",
+		"weapon_type": w_vis,
+		"armor_tier": tier,
 		"has_cape": true,
 		"has_shield": false,
 	}
+
+
+func _on_equipment_changed() -> void:
+	if is_instance_valid(rig_node):
+		rig_node.free()
+		rig_node = null
+	_build_visuals()
+	_refresh_transparency()
+	_ensure_hunter_pet()
+
+
+func _ensure_hunter_pet() -> void:
+	if GameState.player_class == "hunter":
+		if not is_instance_valid(GameState.pet_node) and get_parent() != null:
+			var pet := PetCompanion.new()
+			pet.name = "HunterWolfPet"
+			pet.position = global_position + Vector3(-1.5, 0.0, 1.4)
+			get_parent().add_child.call_deferred(pet)
+		elif is_instance_valid(GameState.pet_node) and GameState.pet_node.has_method("sync_stats"):
+			GameState.pet_node.call("sync_stats", false)
+	else:
+		if is_instance_valid(GameState.pet_node):
+			GameState.pet_node.queue_free()
+			GameState.pet_node = null
 
 
 func _build_visuals() -> void:
@@ -259,6 +313,12 @@ func _unhandled_input(event: InputEvent) -> void:
 					trigger_ability(4)
 				KEY_5:
 					trigger_ability(5)
+				KEY_6:
+					GameState.use_first_item_by_types(["potion", "bandage"])
+				KEY_7:
+					GameState.use_first_item_by_types(["elixir", "mana_potion", "food"])
+				KEY_8:
+					GameState.use_first_item_by_types(["hearthstone"])
 				KEY_F:
 					_interact_nearest_or_target()
 				KEY_ESCAPE:
@@ -358,7 +418,13 @@ func _process_movement(delta: float) -> void:
 		var speed: float = BACKPEDAL_SPEED if (forward_input < 0.0 and absf(strafe_input) < 0.1) else WALK_SPEED
 		velocity.x = move_vec.x * speed
 		velocity.z = move_vec.z * speed
+		if is_on_floor():
+			step_accum += delta
+			if step_accum >= 0.38:
+				step_accum = 0.0
+				AudioManager.play("step", -12.0)
 	else:
+		step_accum = 0.25
 		velocity.x = move_toward(velocity.x, 0.0, 42.0 * delta)
 		velocity.z = move_toward(velocity.z, 0.0, 42.0 * delta)
 
@@ -411,9 +477,10 @@ func _process_auto_attack() -> void:
 
 	var is_mage: bool = GameState.player_class == "mage"
 	var is_rogue: bool = GameState.player_class == "rogue"
+	var is_hunter: bool = GameState.player_class == "hunter"
 	var dist: float = global_position.distance_to(mob.global_position)
-	var reach: float = WAND_RANGE if is_mage else MELEE_RANGE
-	var interval: float = WAND_INTERVAL if is_mage else (DAGGER_INTERVAL if is_rogue else SWING_INTERVAL)
+	var reach: float = WAND_RANGE if is_mage else (BOW_RANGE if is_hunter else MELEE_RANGE)
+	var interval: float = WAND_INTERVAL if is_mage else (BOW_INTERVAL if is_hunter else (DAGGER_INTERVAL if is_rogue else SWING_INTERVAL))
 	if dist <= reach and swing_timer <= 0.0:
 		swing_timer = interval
 		attack_anim_timer = 0.52
@@ -424,6 +491,10 @@ func _process_auto_attack() -> void:
 		if is_mage:
 			var info: Dictionary = GameState.get_attack_damage(0.7, 0)
 			_fire_projectile(mob, Color(0.7, 0.55, 1.0), info, "Автоатака", 0.0, 0.22)
+		elif is_hunter:
+			AudioManager.play("bow_shot")
+			var hinfo: Dictionary = GameState.get_attack_damage(1.0, 0)
+			_fire_arrow(mob, Color(0.92, 0.86, 0.52), hinfo, "Выстрел из лука", 0.0, 0)
 		else:
 			var dmg_info: Dictionary = GameState.get_attack_damage(0.82 if is_rogue else 1.0, 0)
 			mob.take_damage(int(dmg_info["damage"]), self, "Автоатака", bool(dmg_info["is_crit"]))
@@ -435,6 +506,49 @@ func get_cast_progress() -> float:
 	if casting_slot == 0 or cast_total <= 0.0:
 		return 0.0
 	return clampf(1.0 - cast_timer / cast_total, 0.0, 1.0)
+
+
+func get_cast_title() -> String:
+	if casting_slot == 2:
+		return "Огненный шар"
+	if casting_slot == 3:
+		return "Ледяная стрела"
+	if casting_slot == 90:
+		return "Сбор: %s" % (gather_target_prop.prop_title if is_instance_valid(gather_target_prop) else "ресурс")
+	if casting_slot == 91:
+		return "Камень возвращения"
+	return "Чтение"
+
+
+func start_gather_cast(prop: InteractableProp) -> void:
+	if GameState.is_dead or prop == null or not prop.is_available:
+		return
+	if casting_slot != 0:
+		return
+	auto_attack_enabled = false
+	_face_target(prop.global_position)
+	gather_target_prop = prop
+	casting_slot = 90
+	cast_total = 1.4
+	cast_timer = 1.4
+	cast_target = null
+	AudioManager.play("gather")
+	GameState.add_combat_log("Вы начинаете добычу: %s..." % prop.prop_title, GameState.COLOR_LOG_SYSTEM)
+
+
+func start_hearthstone_cast() -> void:
+	if GameState.is_dead or GameState.in_combat:
+		return
+	if casting_slot != 0:
+		return
+	auto_attack_enabled = false
+	casting_slot = 91
+	cast_total = 3.2
+	cast_timer = 3.2
+	cast_target = null
+	gather_target_prop = null
+	_spawn_ring_fx(global_position + Vector3(0, 0.25, 0), Color(0.35, 0.78, 1.0), 0.4, 2.2, 1.4)
+	GameState.add_combat_log("Вы активируете Камень возвращения...", Color(0.45, 0.85, 1.0))
 
 
 func _begin_cast(slot: int, duration: float, mob: MobEntity) -> void:
@@ -450,6 +564,7 @@ func _cancel_cast(reason: String = "") -> void:
 		return
 	casting_slot = 0
 	cast_target = null
+	gather_target_prop = null
 	if reason != "":
 		GameState.add_combat_log(reason, GameState.COLOR_LOG_ERROR)
 
@@ -458,8 +573,36 @@ func _process_cast(delta: float) -> void:
 	if casting_slot == 0:
 		return
 	if Vector2(velocity.x, velocity.z).length() > 0.8 or not is_on_floor():
-		_cancel_cast("Заклинание прервано движением.")
+		_cancel_cast("Действие прервано движением.")
 		return
+	if casting_slot == 90:
+		if not is_instance_valid(gather_target_prop) or not gather_target_prop.is_available:
+			_cancel_cast("Ресурс больше недоступен.")
+			return
+		cast_timer -= delta
+		if cast_timer <= 0.0:
+			var gp: InteractableProp = gather_target_prop
+			casting_slot = 0
+			gather_target_prop = null
+			attack_anim_timer = 0.45
+			gp.complete_gather()
+		return
+	if casting_slot == 91:
+		if GameState.in_combat:
+			_cancel_cast("Камень возвращения сбит вступлением в бой!")
+			return
+		cast_timer -= delta
+		if cast_timer <= 0.0:
+			casting_slot = 0
+			GameState.ability_cooldowns["hearthstone"] = GameState.ability_max_cooldowns["hearthstone"]
+			AudioManager.play("hearthstone")
+			_spawn_ring_fx(global_position + Vector3(0, 0.3, 0), Color(0.4, 0.85, 1.0), 0.5, 2.5, 0.5)
+			global_position = spawn_position
+			velocity = Vector3.ZERO
+			_spawn_ring_fx(global_position + Vector3(0, 0.3, 0), Color(0.4, 0.85, 1.0), 2.5, 0.5, 0.6)
+			GameState.add_combat_log("Камень возвращения перенёс вас на Заставу Северноземья.", Color(0.45, 0.85, 1.0))
+		return
+
 	if not is_instance_valid(cast_target) or cast_target.is_dead():
 		_cancel_cast("Цель потеряна, заклинание прервано.")
 		return
@@ -727,6 +870,9 @@ func _trigger_rogue_ability(slot: int) -> void:
 			if global_position.distance_to(mob.global_position) > MELEE_RANGE + 0.4:
 				GameState.add_combat_log("Подойдите ближе к цели!", GameState.COLOR_LOG_ERROR)
 				return
+			if GameState.combo_target != mob or GameState.combo_points <= 0:
+				GameState.add_combat_log("Нужно хотя бы 1 очко серии (используйте Коварный удар).", GameState.COLOR_LOG_ERROR)
+				return
 			if not GameState.spend_rage(25):
 				GameState.add_combat_log("Недостаточно энергии (нужно 25).", GameState.COLOR_LOG_ERROR)
 				return
@@ -743,6 +889,144 @@ func _trigger_rogue_ability(slot: int) -> void:
 			GameState.touch_combat()
 
 
+func _fire_arrow(mob: MobEntity, color: Color, info: Dictionary, ability_name: String, slow_secs: float, dot_dmg: int) -> void:
+	var arrow := Node3D.new()
+	var shaft := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.025
+	cyl.bottom_radius = 0.025
+	cyl.height = 0.65
+	cyl.radial_segments = 5
+	shaft.mesh = cyl
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.emission_energy_multiplier = 2.0
+	shaft.material_override = mat
+	shaft.rotation_degrees = Vector3(90, 0, 0)
+	arrow.add_child(shaft)
+	get_parent().add_child(arrow)
+
+	var start: Vector3 = global_position + Vector3(0, 1.45, 0)
+	var end: Vector3 = mob.global_position + Vector3(0, 1.0, 0)
+	arrow.global_position = start
+	arrow.look_at(end, Vector3.UP)
+	var travel: float = maxf(0.08, start.distance_to(end) / 34.0)
+	var dmg: int = int(info["damage"])
+	var crit: bool = bool(info["is_crit"])
+	var tw := arrow.create_tween()
+	tw.tween_property(arrow, "global_position", end, travel)
+	tw.tween_callback(func() -> void:
+		if is_instance_valid(mob) and not mob.is_dead():
+			mob.take_damage(dmg, self, ability_name, crit)
+			if slow_secs > 0.0:
+				mob.apply_slow(slow_secs)
+			if dot_dmg > 0:
+				mob.apply_dot(dot_dmg, 8.0, "Укус змеи")
+		arrow.queue_free()
+	)
+
+
+func _trigger_hunter_ability(slot: int) -> void:
+	match slot:
+		1:
+			if auto_attack_enabled:
+				auto_attack_enabled = false
+				GameState.add_combat_log("Автострельба остановлена.", GameState.COLOR_LOG_SYSTEM)
+			else:
+				var mob: MobEntity = _get_target_mob()
+				if mob == null:
+					mob = _find_nearest_living_mob(BOW_RANGE)
+					if mob != null:
+						GameState.set_target(mob)
+				if mob == null or mob.is_dead():
+					GameState.add_combat_log("Нет подходящей цели для выстрела.", GameState.COLOR_LOG_ERROR)
+					return
+				auto_attack_enabled = true
+				GameState.add_combat_log("Охотник берёт цель на прицел: %s." % mob.mob_title, GameState.COLOR_LOG_SYSTEM)
+		2:
+			if GameState.ability_cooldowns["arcane_shot"] > 0.0:
+				GameState.add_combat_log("«Чародейский выстрел» ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			var mob: MobEntity = _get_target_mob()
+			if mob == null or mob.is_dead():
+				GameState.add_combat_log("Выберите живого врага!", GameState.COLOR_LOG_ERROR)
+				return
+			if global_position.distance_to(mob.global_position) > BOW_RANGE + 2.0:
+				GameState.add_combat_log("Цель слишком далеко (макс. %d м)." % int(BOW_RANGE + 2), GameState.COLOR_LOG_ERROR)
+				return
+			if not GameState.spend_rage(25):
+				GameState.add_combat_log("Недостаточно маны (нужно 25).", GameState.COLOR_LOG_ERROR)
+				return
+			GameState.ability_cooldowns["arcane_shot"] = GameState.ability_max_cooldowns["arcane_shot"]
+			attack_anim_timer = 0.50
+			auto_attack_enabled = true
+			_face_target(mob.global_position)
+			AudioManager.play("bow_shot")
+			var info: Dictionary = GameState.get_attack_damage(1.55, 6)
+			_fire_arrow(mob, Color(0.55, 0.78, 1.0), info, "Чародейский выстрел", 0.0, 0)
+			GameState.touch_combat()
+		3:
+			if GameState.ability_cooldowns["serpent_sting"] > 0.0:
+				GameState.add_combat_log("«Укус змеи» ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			var mob: MobEntity = _get_target_mob()
+			if mob == null or mob.is_dead():
+				GameState.add_combat_log("Выберите живого врага!", GameState.COLOR_LOG_ERROR)
+				return
+			if global_position.distance_to(mob.global_position) > BOW_RANGE + 2.0:
+				GameState.add_combat_log("Цель слишком далеко!", GameState.COLOR_LOG_ERROR)
+				return
+			if not GameState.spend_rage(25):
+				GameState.add_combat_log("Недостаточно маны (нужно 25).", GameState.COLOR_LOG_ERROR)
+				return
+			GameState.ability_cooldowns["serpent_sting"] = GameState.ability_max_cooldowns["serpent_sting"]
+			attack_anim_timer = 0.50
+			auto_attack_enabled = true
+			_face_target(mob.global_position)
+			AudioManager.play("bow_shot")
+			var info: Dictionary = GameState.get_attack_damage(0.75, 2)
+			var dot_tick: int = maxi(5, int(round(float(info["damage"]) * 0.55 + 3.0)))
+			_fire_arrow(mob, Color(0.35, 0.96, 0.35), info, "Укус змеи", 0.0, dot_tick)
+			GameState.touch_combat()
+		4:
+			if GameState.ability_cooldowns["concussive_shot"] > 0.0:
+				GameState.add_combat_log("«Шокирующий выстрел» ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			var mob: MobEntity = _get_target_mob()
+			if mob == null or mob.is_dead():
+				GameState.add_combat_log("Выберите живого врага!", GameState.COLOR_LOG_ERROR)
+				return
+			if global_position.distance_to(mob.global_position) > BOW_RANGE + 2.0:
+				GameState.add_combat_log("Цель слишком далеко!", GameState.COLOR_LOG_ERROR)
+				return
+			if not GameState.spend_rage(15):
+				GameState.add_combat_log("Недостаточно маны (нужно 15).", GameState.COLOR_LOG_ERROR)
+				return
+			GameState.ability_cooldowns["concussive_shot"] = GameState.ability_max_cooldowns["concussive_shot"]
+			attack_anim_timer = 0.48
+			_face_target(mob.global_position)
+			AudioManager.play("bow_shot")
+			var info: Dictionary = GameState.get_attack_damage(0.85, 0)
+			_fire_arrow(mob, Color(1.0, 0.85, 0.25), info, "Шокирующий выстрел", 4.5, 0)
+			if mob.cast_display_name != "":
+				mob.apply_stun(0.6)
+			GameState.touch_combat()
+		5:
+			if GameState.ability_cooldowns["mend_pet"] > 0.0:
+				GameState.add_combat_log("«Лечение зверя» ещё перезаряжается.", GameState.COLOR_LOG_ERROR)
+				return
+			if not GameState.spend_rage(20):
+				GameState.add_combat_log("Недостаточно маны (нужно 20).", GameState.COLOR_LOG_ERROR)
+				return
+			GameState.ability_cooldowns["mend_pet"] = GameState.ability_max_cooldowns["mend_pet"]
+			_ensure_hunter_pet()
+			if is_instance_valid(GameState.pet_node) and GameState.pet_node.has_method("heal_or_revive"):
+				GameState.pet_node.call("heal_or_revive", 0.60)
+				_spawn_ring_fx(GameState.pet_node.global_position + Vector3(0, 0.2, 0), Color(0.4, 0.96, 0.45), 0.3, 2.0, 0.45)
+
+
 func trigger_ability(slot: int) -> void:
 	if GameState.is_dead:
 		GameState.add_combat_log("Вы мертвы и не можете применять способности.", GameState.COLOR_LOG_ERROR)
@@ -752,6 +1036,9 @@ func trigger_ability(slot: int) -> void:
 		return
 	if GameState.player_class == "rogue":
 		_trigger_rogue_ability(slot)
+		return
+	if GameState.player_class == "hunter":
+		_trigger_hunter_ability(slot)
 		return
 
 	match slot:
@@ -866,7 +1153,7 @@ func trigger_ability(slot: int) -> void:
 func get_swing_progress() -> float:
 	if not auto_attack_enabled:
 		return 0.0
-	var iv: float = WAND_INTERVAL if GameState.player_class == "mage" else (DAGGER_INTERVAL if GameState.player_class == "rogue" else SWING_INTERVAL)
+	var iv: float = WAND_INTERVAL if GameState.player_class == "mage" else (BOW_INTERVAL if GameState.player_class == "hunter" else (DAGGER_INTERVAL if GameState.player_class == "rogue" else SWING_INTERVAL))
 	return clampf(1.0 - (swing_timer / iv), 0.0, 1.0)
 
 
@@ -1034,7 +1321,7 @@ func _update_camera_and_ring(_delta: float) -> void:
 			target_ring.global_position = Vector3(t.global_position.x, t.global_position.y + 0.08, t.global_position.z)
 			var mat := target_ring.material_override as StandardMaterial3D
 			var ring_scale: float = 1.0
-			if t is QuestNPC:
+			if t is QuestNPC or t is PetCompanion:
 				if mat:
 					mat.albedo_color = Color(0.25, 0.92, 0.35, 0.85)
 					mat.emission = Color(0.25, 0.92, 0.35)
@@ -1084,7 +1371,10 @@ func _update_animation(delta: float) -> void:
 	if attack_anim_timer > 0.0:
 		atk_prog = 1.0 - (attack_anim_timer / 0.55)
 
-	RetroModelBuilder.animate_humanoid(rig_node, anim_state, anim_time, atk_prog, spin, 0.0, delta, {"dual_wield": GameState.player_class == "rogue"})
+	RetroModelBuilder.animate_humanoid(rig_node, anim_state, anim_time, atk_prog, spin, 0.0, delta, {
+		"dual_wield": GameState.player_class == "rogue",
+		"bow_aim": GameState.player_class == "hunter",
+	})
 
 
 func _on_target_changed(new_target: Node3D) -> void:
@@ -1098,6 +1388,7 @@ func _on_player_died() -> void:
 	charge_target = null
 	casting_slot = 0
 	cast_target = null
+	gather_target_prop = null
 	_spawn_corpse()
 	if rig_node:
 		rig_node.visible = false
@@ -1172,6 +1463,8 @@ func _on_player_resurrected(at_corpse: bool) -> void:
 
 func _on_level_up() -> void:
 	_spawn_level_up_pillar()
+	if is_instance_valid(GameState.pet_node) and GameState.pet_node.has_method("sync_stats"):
+		GameState.pet_node.call("sync_stats", true)
 
 
 func _spawn_ring_fx(pos: Vector3, color: Color, start_rad: float, end_rad: float, duration: float) -> void:

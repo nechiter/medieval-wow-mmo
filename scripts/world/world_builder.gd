@@ -745,12 +745,44 @@ func _build_mine_entrance(origin: Vector3) -> void:
 		cl.position = pos
 		mine.add_child(cl)
 
-	var ore_spots: Array[Vector3] = [
-		Vector3(-11.0, 0.2, -30.0), Vector3(11.0, 0.2, -36.0),
-		Vector3(-7.0, 0.2, -44.0), Vector3(7.0, 0.2, -44.0),
+	# Добываемые жилы лазурных кристаллов и меди в руднике
+	var vein_defs: Array[Dictionary] = [
+		{"pos": Vector3(-3.8, 0.0, -9.5), "kind": "azure_crystal", "title": "Лазурная жила"},
+		{"pos": Vector3(3.8, 0.0, -17.5), "kind": "azure_crystal", "title": "Лазурная жила"},
+		{"pos": Vector3(-10.5, 0.0, -30.0), "kind": "azure_crystal", "title": "Лазурная жила"},
+		{"pos": Vector3(10.5, 0.0, -36.0), "kind": "azure_crystal", "title": "Лазурная жила"},
+		{"pos": Vector3(-7.0, 0.0, -44.0), "kind": "azure_crystal", "title": "Лазурная жила"},
+		{"pos": Vector3(-8.5, 0.0, 5.5), "kind": "copper_ore", "title": "Медная жила"},
+		{"pos": Vector3(8.5, 0.0, 5.0), "kind": "copper_ore", "title": "Медная жила"},
 	]
-	for oi in range(ore_spots.size()):
-		_make_crystal_cluster(mine, ore_spots[oi], mat_ore, oi)
+	for vi in range(vein_defs.size()):
+		var vd: Dictionary = vein_defs[vi]
+		var vein := InteractableProp.new()
+		vein.name = "OreVein_%d" % (vi + 1)
+		vein.prop_id = "ore_vein"
+		vein.sub_kind = String(vd["kind"])
+		vein.prop_title = String(vd["title"])
+		vein.position = origin + (vd["pos"] as Vector3)
+		add_child(vein)
+
+	var herb_defs: Array[Dictionary] = [
+		{"pos": Vector3(-11.5, 0.0, -7.5), "kind": "peacebloom", "title": "Мироцвет"},
+		{"pos": Vector3(11.8, 0.0, -9.0), "kind": "peacebloom", "title": "Мироцвет"},
+		{"pos": Vector3(-13.5, 0.0, -25.0), "kind": "peacebloom", "title": "Мироцвет"},
+		{"pos": Vector3(13.0, 0.0, -34.0), "kind": "peacebloom", "title": "Мироцвет"},
+		{"pos": Vector3(22.5, 0.0, -10.5), "kind": "silverleaf", "title": "Сребролист"},
+		{"pos": Vector3(23.5, 0.0, -27.5), "kind": "silverleaf", "title": "Сребролист"},
+		{"pos": Vector3(-20.0, 0.0, -11.0), "kind": "silverleaf", "title": "Сребролист"},
+	]
+	for hi in range(herb_defs.size()):
+		var hd: Dictionary = herb_defs[hi]
+		var herb := InteractableProp.new()
+		herb.name = "HerbNode_%d" % (hi + 1)
+		herb.prop_id = "herb_node"
+		herb.sub_kind = String(hd["kind"])
+		herb.prop_title = String(hd["title"])
+		herb.position = hd["pos"]
+		add_child(herb)
 
 	# Ящики у входа и в пещере
 	_make_static_box(mine, Vector3(1.3, 1.3, 1.3), Vector3(-5.8, 0.65, 5.5), mat_crate, Vector3(0, 20, 0))
@@ -921,6 +953,24 @@ func _spawn_entities() -> void:
 	npc.position = Vector3(2.8, 0.08, 3.4)
 	npc.rotation.y = PI - 0.35
 	add_child(npc)
+
+	var lyr := QuestNPC.new()
+	lyr.name = "HerbalistLyra"
+	lyr.npc_name = "Травница Лира"
+	lyr.npc_title = "Алхимик заставы"
+	lyr.role = "herbalist"
+	lyr.position = Vector3(3.8, 0.08, 6.8)
+	lyr.rotation.y = PI * 0.78
+	add_child(lyr)
+
+	var guard := QuestNPC.new()
+	guard.name = "OutpostGuard"
+	guard.npc_name = "Стражник Элвинн"
+	guard.npc_title = "Охрана заставы"
+	guard.role = "patrol"
+	guard.position = Vector3(-3.8, 0.08, 1.5)
+	guard.rotation.y = 0.25
+	add_child(guard)
 
 	_spawn_mob_group("ForestWolf", {
 		"mob_id": "wolf",

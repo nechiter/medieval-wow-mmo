@@ -53,6 +53,34 @@ func _ready() -> void:
 			"weapon_type": "staff",
 			"has_cape": false,
 		}
+	elif role == "herbalist":
+		cfg = {
+			"scale": 0.98,
+			"archetype": "hunter",
+			"armor_color": Color(0.22, 0.44, 0.22),
+			"accent_color": Color(0.76, 0.68, 0.26),
+			"skin_color": Color(0.88, 0.72, 0.58),
+			"pants_color": Color(0.18, 0.26, 0.16),
+			"cape_color": Color(0.16, 0.38, 0.18),
+			"hair_color": Color(0.62, 0.34, 0.16),
+			"eye_color": Color(0.24, 0.65, 0.28),
+			"weapon_type": "staff",
+			"has_cape": true,
+		}
+	elif role == "patrol":
+		cfg = {
+			"scale": 1.04,
+			"archetype": "guard",
+			"armor_color": Color(0.26, 0.36, 0.56),
+			"accent_color": Color(0.82, 0.66, 0.22),
+			"skin_color": Color(0.86, 0.69, 0.55),
+			"pants_color": Color(0.20, 0.22, 0.28),
+			"cape_color": Color(0.16, 0.30, 0.60),
+			"eye_color": Color(0.18, 0.32, 0.55),
+			"weapon_type": "shortsword",
+			"has_cape": true,
+			"has_shield": true,
+		}
 	rig_node = RetroModelBuilder.build_humanoid(cfg)
 	add_child(rig_node)
 
@@ -105,10 +133,10 @@ func _process(delta: float) -> void:
 func _refresh_quest_marker() -> void:
 	if quest_marker == null:
 		return
-	if role == "merchant":
+	if role in ["merchant", "patrol"]:
 		quest_marker.visible = false
 		return
-	var status: Dictionary = GameState.get_npc_quest_status()
+	var status: Dictionary = GameState.get_npc_quest_status(npc_name)
 	var marker: String = String(status.get("marker", ""))
 	if marker == "":
 		quest_marker.visible = false

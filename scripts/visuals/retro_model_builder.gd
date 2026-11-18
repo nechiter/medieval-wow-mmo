@@ -390,6 +390,7 @@ static func build_humanoid(config: Dictionary) -> Node3D:
 	var has_candle: bool = bool(config.get("has_candle", false))
 	var has_shield: bool = bool(config.get("has_shield", false))
 	var has_offhand_dagger: bool = bool(config.get("has_offhand_dagger", false))
+	var armor_tier: int = int(config.get("armor_tier", 0))
 
 	var is_kobold: bool = (archetype == "kobold")
 	var is_murloc: bool = (archetype == "murloc")
@@ -522,16 +523,28 @@ static func build_humanoid(config: Dictionary) -> Node3D:
 		{"y": 0.64, "rx": 0.14, "rz": 0.135, "shade": 1.04},
 	], 8, mat_accent if archetype in ["warrior", "guard", "mage"] else mat_boots, Vector3.ZERO, Vector3.ZERO, "Collar"))
 
-	# Нагрудный табард или крестовая кожаная портупея (разбойники/кобольды)
-	if archetype in ["bandit", "rogue"] or is_kobold:
+	# Нагрудный табард или крестовая кожаная портупея (разбойники/кобольды/охотники)
+	if archetype in ["bandit", "rogue", "hunter"] or is_kobold:
 		torso_pivot.add_child(_make_box_mesh(Vector3(0.075, 0.58, 0.41), mat_boots, Vector3(0.0, 0.32, 0.0), Vector3(0, 0, 34), "BandolierA"))
 		torso_pivot.add_child(_make_box_mesh(Vector3(0.075, 0.58, 0.41), mat_boots, Vector3(0.0, 0.32, 0.0), Vector3(0, 0, -34), "BandolierB"))
+		if archetype == "hunter":
+			var quiver := Node3D.new()
+			quiver.name = "Quiver"
+			quiver.position = Vector3(0.18, 0.38, 0.21)
+			quiver.rotation_degrees = Vector3(14, 0, -18)
+			torso_pivot.add_child(quiver)
+			quiver.add_child(_make_prism_or_cyl(0.055, 0.042, 0.46, 6, mat_wood, Vector3.ZERO, Vector3.ZERO, "QuiverTube"))
+			var mat_fletch := make_retro_material(Color(0.92, 0.90, 0.82), 0.7, 0.0)
+			for qx in [-0.02, 0.02]:
+				quiver.add_child(_make_box_mesh(Vector3(0.02, 0.12, 0.03), mat_fletch, Vector3(qx, 0.27, 0.0), Vector3(0, 20, 0), "ArrowFletch"))
 	else:
 		torso_pivot.add_child(_make_lofted_mesh([
 			{"y": -0.10, "rx": 0.14, "rz": 0.025, "oz": -0.01, "shade": 0.76},
 			{"y": 0.22, "rx": 0.15, "rz": 0.025, "oz": -0.02, "shade": 0.95},
 			{"y": 0.48, "rx": 0.17, "rz": 0.025, "oz": -0.02, "shade": 1.05},
 		], 4, mat_accent if archetype == "guard" else mat_cape, Vector3(0, 0.02, -0.188), Vector3.ZERO, "Tabard"))
+	if armor_tier >= 2 and not is_kobold:
+		torso_pivot.add_child(_make_prism_or_cyl(0.085, 0.085, 0.035, 6, mat_accent, Vector3(0, 0.36, -0.195), Vector3(90, 0, 0), "ChestMedallion"))
 
 	# Спинной гребень мурлока
 	if is_murloc:
@@ -676,6 +689,17 @@ static func build_humanoid(config: Dictionary) -> Node3D:
 				{"y": 0.04, "rx": 0.155, "rz": 0.15, "oz": -0.03, "shade": 0.82},
 				{"y": 0.17, "rx": 0.175, "rz": 0.17, "oz": -0.02, "shade": 1.0},
 			], 8, mat_mask, Vector3.ZERO, Vector3.ZERO, "FaceMask"))
+		elif archetype == "hunter":
+			var mat_hood := make_retro_material(armor_color.darkened(0.14), 0.86, 0.04, Color.BLACK, 0.0, "cloth")
+			head_pivot.add_child(_make_lofted_mesh([
+				{"y": 0.22, "rx": 0.195, "rz": 0.21, "oz": 0.03, "shade": 0.82},
+				{"y": 0.36, "rx": 0.185, "rz": 0.21, "oz": 0.02, "shade": 1.0},
+				{"y": 0.44, "rx": 0.09, "rz": 0.14, "oz": 0.06, "shade": 1.06},
+			], 8, mat_hood, Vector3.ZERO, Vector3.ZERO, "RangerHood"))
+			head_pivot.add_child(_make_lofted_mesh([
+				{"y": 0.05, "rx": 0.15, "rz": 0.09, "shade": 0.78},
+				{"y": 0.25, "rx": 0.18, "rz": 0.10, "shade": 1.0},
+			], 6, mat_hair, Vector3(0, 0, 0.10), Vector3.ZERO, "HairBack"))
 		elif archetype == "guard":
 			head_pivot.add_child(_make_lofted_mesh([
 				{"y": 0.22, "rx": 0.19, "rz": 0.20, "shade": 0.84},
@@ -722,7 +746,7 @@ static func build_humanoid(config: Dictionary) -> Node3D:
 
 		# Плечевой сустав + рука входят внутрь грудной клетки без просвета
 		arm.add_child(_make_joint_cap(0.112, 0.088, mat_armor, Vector3(-s * 0.025, 0.0, 0.0), "ShoulderJoint"))
-		arm.add_child(_make_pauldron(pauldron_mat, mat_armor if not is_kobold else mat_accent, s, "Pauldron", is_boss))
+		arm.add_child(_make_pauldron(pauldron_mat, mat_armor if not is_kobold else mat_accent, s, "Pauldron", is_boss or armor_tier >= 2))
 		arm.add_child(_make_lofted_mesh([
 			{"y": -0.30, "rx": 0.078, "rz": 0.082, "shade": 0.78},
 			{"y": 0.03, "rx": 0.098, "rz": 0.102, "shade": 1.0},
@@ -805,6 +829,25 @@ static func _build_weapon(weapon_type: String, mat_steel: Material, mat_accent: 
 			{"y": 0.0, "rx": 0.11, "rz": 0.11, "shade": 1.15},
 			{"y": 0.12, "rx": 0.02, "rz": 0.02, "shade": 1.2},
 		], 6, mat_ember, Vector3(0, 0, -1.25), Vector3(-90, 0, 0), "Orb"))
+	elif weapon_type == "bow":
+		var mat_string := make_retro_material(Color(0.86, 0.84, 0.78), 0.7, 0.0)
+		w.add_child(_make_lofted_mesh([
+			{"y": -0.10, "rx": 0.026, "rz": 0.026, "shade": 0.85},
+			{"y": 0.10, "rx": 0.026, "rz": 0.026, "shade": 1.02},
+		], 6, mat_accent, Vector3(0, 0, -0.02), Vector3.ZERO, "BowGrip"))
+		w.add_child(_make_lofted_mesh([
+			{"y": 0.0, "rx": 0.024, "rz": 0.028, "shade": 0.85},
+			{"y": 0.24, "rx": 0.020, "rz": 0.024, "oz": 0.06, "shade": 0.98},
+			{"y": 0.44, "rx": 0.012, "rz": 0.015, "oz": 0.18, "shade": 1.08},
+		], 5, mat_wood, Vector3(0, 0.09, -0.02), Vector3.ZERO, "UpperLimb"))
+		w.add_child(_make_lofted_mesh([
+			{"y": -0.44, "rx": 0.012, "rz": 0.015, "oz": 0.18, "shade": 0.82},
+			{"y": -0.24, "rx": 0.020, "rz": 0.024, "oz": 0.06, "shade": 0.94},
+			{"y": 0.0, "rx": 0.024, "rz": 0.028, "shade": 1.02},
+		], 5, mat_wood, Vector3(0, -0.09, -0.02), Vector3.ZERO, "LowerLimb"))
+		w.add_child(_make_box_mesh(Vector3(0.010, 1.04, 0.010), mat_string, Vector3(0, 0.0, 0.16), Vector3.ZERO, "BowString"))
+		w.add_child(_make_prism_or_cyl(0.012, 0.012, 0.62, 5, mat_wood, Vector3(0.02, 0.02, -0.10), Vector3(-90, 0, 0), "NockedArrow"))
+		w.add_child(_make_prism_or_cyl(0.002, 0.026, 0.10, 4, mat_steel, Vector3(0.02, 0.02, -0.44), Vector3(-90, 0, 0), "ArrowHead"))
 	elif weapon_type == "dagger":
 		w.add_child(_make_lofted_mesh([
 			{"y": -0.12, "rx": 0.025, "rz": 0.025, "shade": 0.8},
@@ -1037,7 +1080,63 @@ static func build_wolf(config: Dictionary) -> Node3D:
 		paw.position = Vector3(0.0, -0.30, 0.0)
 		lower.add_child(paw)
 
+	if bool(config.get("is_pet", false)):
+		var mat_collar := make_retro_material(Color(0.56, 0.14, 0.14), 0.72, 0.1)
+		var mat_tag := make_retro_material(Color(0.92, 0.76, 0.22), 0.35, 0.65)
+		body_pivot.add_child(_make_lofted_mesh([
+			{"y": -0.05, "rx": 0.245, "rz": 0.245, "shade": 0.86},
+			{"y": 0.05, "rx": 0.240, "rz": 0.240, "shade": 1.08},
+		], 8, mat_collar, Vector3(0, 0.12, -0.40), Vector3(-55, 0, 0), "PetCollar"))
+		body_pivot.add_child(_make_box_mesh(Vector3(0.08, 0.09, 0.03), mat_tag, Vector3(0, -0.02, -0.52), Vector3(18, 0, 0), "PetMedallion"))
+
 	return rig
+
+
+static func build_ore_vein(is_crystal: bool) -> Node3D:
+	var root := Node3D.new()
+	var mat_rock := make_retro_material(Color(0.28, 0.27, 0.30), 0.94, 0.02, Color.BLACK, 0.0, "stone")
+	var base := MeshInstance3D.new()
+	var sph := SphereMesh.new()
+	sph.radius = 0.55
+	sph.height = 0.70
+	sph.radial_segments = 6
+	sph.rings = 3
+	base.mesh = sph
+	base.material_override = mat_rock
+	base.position = Vector3(0, 0.25, 0)
+	root.add_child(base)
+
+	var mat_ore: StandardMaterial3D = (
+		make_retro_material(Color(0.32, 0.82, 1.0), 0.22, 0.35, Color(0.25, 0.72, 1.0), 2.3)
+		if is_crystal
+		else make_retro_material(Color(0.84, 0.50, 0.22), 0.38, 0.55, Color(0.65, 0.35, 0.10), 0.8)
+	)
+	for sp in [
+		{"pos": Vector3(0.0, 0.65, 0.0), "h": 0.85, "r": 0.19, "rot": Vector3(8, 10, -10)},
+		{"pos": Vector3(-0.24, 0.48, 0.16), "h": 0.62, "r": 0.14, "rot": Vector3(18, 30, 26)},
+		{"pos": Vector3(0.22, 0.45, -0.14), "h": 0.56, "r": 0.13, "rot": Vector3(-16, -22, -24)},
+	]:
+		root.add_child(_make_prism_or_cyl(0.02, sp["r"], sp["h"], 5, mat_ore, sp["pos"], sp["rot"], "OreShard"))
+	return root
+
+
+static func build_herb_cluster(herb_kind: String) -> Node3D:
+	var root := Node3D.new()
+	var is_silver: bool = (herb_kind == "silverleaf")
+	var mat_stem := make_retro_material(Color(0.18, 0.42, 0.18), 0.90, 0.0)
+	var mat_petal := (
+		make_retro_material(Color(0.76, 0.92, 1.0), 0.35, 0.1, Color(0.50, 0.78, 1.0), 1.0)
+		if is_silver
+		else make_retro_material(Color(1.0, 0.82, 0.22), 0.38, 0.0, Color(0.85, 0.65, 0.12), 0.8)
+	)
+	for i in range(4):
+		var ang: float = float(i) * TAU / 4.0 + 0.4
+		var ox: float = cos(ang) * 0.16
+		var oz: float = sin(ang) * 0.16
+		var lean := Vector3(sin(ang) * 18.0, rad_to_deg(ang), -cos(ang) * 18.0)
+		root.add_child(_make_prism_or_cyl(0.02, 0.035, 0.44, 4, mat_stem, Vector3(ox, 0.20, oz), lean, "Stem_%d" % i))
+		root.add_child(_make_prism_or_cyl(0.09, 0.04, 0.12, 5, mat_petal, Vector3(ox * 1.45, 0.44, oz * 1.45), lean, "Bloom_%d" % i))
+	return root
 
 
 static func _blend_rot(node: Node3D, target: Vector3, blend: float) -> void:
@@ -1201,6 +1300,19 @@ static func animate_humanoid(rig: Node3D, anim_state: String, anim_time: float, 
 		elbow_r_rot = Vector3(0.15, 0, 0)
 		cape_rot = Vector3(-0.82, 0, 0)
 		cape_low_rot = Vector3(-0.38, 0, 0)
+	elif attack_progress > 0.0 and bool(flags.get("bow_aim", false)):
+		var bp: float = clampf(attack_progress, 0.0, 1.0)
+		torso_yaw = 0.28
+		arm_r_rot = Vector3(1.36, 0.22, 0.04)
+		elbow_r_rot = Vector3(0.18, 0, 0)
+		if bp < 0.48:
+			var t: float = bp / 0.48
+			arm_l_rot = Vector3(lerpf(0.8, 1.38, t), lerpf(-0.2, -0.55, t), -0.10)
+			elbow_l_rot = Vector3(lerpf(0.5, 1.25, t), 0, 0)
+		else:
+			var t: float = (bp - 0.48) / 0.52
+			arm_l_rot = Vector3(lerpf(1.38, 0.20, t), lerpf(-0.55, 0.0, t), -0.14)
+			elbow_l_rot = Vector3(lerpf(1.25, 0.30, t), 0, 0)
 	elif attack_progress > 0.0:
 		var p: float = clampf(attack_progress, 0.0, 1.0)
 		var dual: bool = bool(flags.get("dual_wield", false))

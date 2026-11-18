@@ -19,6 +19,12 @@ const CLASSES: Array[Dictionary] = [
 		"color": Color(0.98, 0.84, 0.26),
 		"desc": "Стремительный убийца в тенях.\nРесурс: Энергия + очки серии (1–5★).\n\nУмения: Коварный удар / Внезапный удар,\nПотрошение, Незаметность, Удар по почкам.\n\nКрадётся мимо врагов и наносит взрывной урон.",
 	},
+	{
+		"id": "hunter",
+		"title": "ОХОТНИК",
+		"color": Color(0.56, 0.86, 0.36),
+		"desc": "Меткий следопыт с ручным волком.\nРесурс: Мана + питомец Лесной страж.\n\nУмения: Выстрел из лука, Чародейский,\nУкус змеи (яд), Шокирующий, Лечение зверя.\n\nВолк танкует врагов, а вы бьёте издали.",
+	},
 ]
 
 
@@ -62,7 +68,7 @@ func _ready() -> void:
 		cont_center.add_child(cont_btn)
 
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 24)
+	row.add_theme_constant_override("separation", 16)
 	vbox.add_child(row)
 
 	for cls in CLASSES:
@@ -71,7 +77,7 @@ func _ready() -> void:
 
 func _make_card(cls: Dictionary) -> Control:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(310, 330)
+	panel.custom_minimum_size = Vector2(268, 330)
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.09, 0.09, 0.13, 0.95)
 	sb.border_color = cls["color"]

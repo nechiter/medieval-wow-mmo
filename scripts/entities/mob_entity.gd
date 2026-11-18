@@ -39,6 +39,23 @@ var respawn_timer: float = 0.0
 var anim_time: float = 0.0
 var has_shouted_aggro: bool = false
 
+var dot_timer: float = 0.0
+var dot_tick_accum: float = 0.0
+var dot_damage: int = 0
+var dot_name: String = "Яд"
+
+var cast_display_name: String = ""
+var cast_progress: float = 0.0
+var hit_flash_timer: float = 0.0
+var aggro_target: Node3D = null
+
+var boss_slam_cd: float = 6.0
+var boss_slam_cast: float = 0.0
+var boss_slam_ring: MeshInstance3D = null
+var boss_adds_spawned: bool = false
+var boss_enraged: bool = false
+var spawned_adds: Array[Node3D] = []
+
 var rig_node: Node3D = null
 var nameplate: Label3D = null
 var loot_indicator: MeshInstance3D = null
@@ -238,8 +255,18 @@ func _physics_process(delta: float) -> void:
 		attack_cooldown = maxf(0.0, attack_cooldown - delta)
 	if attack_anim_timer > 0.0:
 		attack_anim_timer = maxf(0.0, attack_anim_timer - delta)
+	if hit_flash_timer > 0.0:
+		hit_flash_timer = maxf(0.0, hit_flash_timer - delta)
+		if rig_node:
+			var sc_base: float = 1.0 + (0.06 if hit_flash_timer > 0.0 else 0.0)
+			rig_node.scale = Vector3.ONE * (sc_base * (1.56 if boss_enraged else (1.42 if mob_id == "boss_crusher" else (0.90 if mob_id == "murloc" else (1.08 if mob_id == "wolf" else (1.0 if mob_id == "bandit" else 0.88))))))
+	elif rig_node and mob_id == "boss_crusher":
+		rig_node.scale = Vector3.ONE * (1.56 if boss_enraged else 1.42)
 
 	if state == State.DEAD:
+		cast_display_name = ""
+		cast_progress = 0.0
+		_clear_boss_ring()
 		respawn_timer -= delta
 		if loot_indicator and loot_indicator.visible:
 			loot_indicator.rotation.y += delta * 2.4
@@ -249,6 +276,15 @@ func _physics_process(delta: float) -> void:
 		_update_animation(delta)
 		return
 
+	if dot_timer > 0.0:
+		dot_timer = maxf(0.0, dot_timer - delta)
+		dot_tick_accum += delta
+		if dot_tick_accum >= 2.0:
+			dot_tick_accum -= 2.0
+			take_damage(dot_damage, GameState.player_node, dot_name, false)
+			if state == State.DEAD:
+				return
+
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
 	else:
@@ -256,9 +292,15 @@ func _physics_process(delta: float) -> void:
 
 	var player: Node3D = GameState.player_node
 	var player_alive: bool = is_instance_valid(player) and not GameState.is_dead
+	var active_target: Node3D = _resolve_combat_target(player, player_alive)
+	var has_target: bool = is_instance_valid(active_target)
 
 	match state:
 		State.STUNNED:
+			cast_display_name = ""
+			cast_progress = 0.0
+			boss_slam_cast = 0.0
+			_clear_boss_ring()
 			velocity.x = 0.0
 			velocity.z = 0.0
 			stun_timer -= delta
@@ -267,22 +309,38 @@ func _physics_process(delta: float) -> void:
 			if stun_timer <= 0.0:
 				if stun_indicator:
 					stun_indicator.visible = false
-				state = State.CHASE if player_alive else State.EVADE_RETURN
+				state = State.CHASE if has_target else State.EVADE_RETURN
 
 		State.IDLE:
 			_process_idle(delta, player, player_alive)
 
 		State.CHASE:
-			_process_chase(delta, player, player_alive)
+			_process_chase(delta, active_target, has_target)
 
 		State.ATTACK:
-			_process_attack(delta, player, player_alive)
+			_process_attack(delta, active_target, has_target)
 
 		State.EVADE_RETURN:
+			cast_display_name = ""
+			cast_progress = 0.0
+			_clear_boss_ring()
 			_process_evade_return(delta)
 
 	move_and_slide()
 	_update_animation(delta)
+
+
+func _resolve_combat_target(player: Node3D, player_alive: bool) -> Node3D:
+	if is_instance_valid(aggro_target) and aggro_target is PetCompanion and not GameState.pet_dead:
+		return aggro_target
+	aggro_target = null
+	return player if player_alive else null
+
+
+func _clear_boss_ring() -> void:
+	if is_instance_valid(boss_slam_ring):
+		boss_slam_ring.queue_free()
+		boss_slam_ring = null
 
 
 func _process_idle(delta: float, player: Node3D, player_alive: bool) -> void:
@@ -342,8 +400,114 @@ func apply_slow(duration: float) -> void:
 	GameState.floating_text_requested.emit(global_position + Vector3(0, 2.3, 0), "ЗАМЕДЛЕН", Color(0.55, 0.85, 1.0), false)
 
 
+func apply_dot(dmg_per_tick: int, duration: float, label: String = "Укус змеи") -> void:
+	if state == State.DEAD:
+		return
+	dot_damage = maxi(2, dmg_per_tick)
+	dot_timer = maxf(dot_timer, duration)
+	dot_name = label
+	dot_tick_accum = 0.0
+	GameState.floating_text_requested.emit(global_position + Vector3(0, 2.4, 0), "ЯД!", Color(0.45, 0.95, 0.35), false)
+
+
+func _deal_melee_or_spell_damage(target: Node3D, dmg: int, label: String) -> void:
+	if target is PetCompanion:
+		(target as PetCompanion).take_damage(dmg, label)
+	else:
+		GameState.damage_player(dmg, label)
+
+
+func _spawn_boss_slam_ring() -> void:
+	_clear_boss_ring()
+	boss_slam_ring = MeshInstance3D.new()
+	var disc := CylinderMesh.new()
+	disc.top_radius = 5.0
+	disc.bottom_radius = 5.0
+	disc.height = 0.04
+	disc.radial_segments = 28
+	boss_slam_ring.mesh = disc
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.16, 0.10, 0.20)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.18, 0.10)
+	mat.emission_energy_multiplier = 1.15
+	boss_slam_ring.material_override = mat
+	boss_slam_ring.position = Vector3(0, 0.06, 0)
+
+	var rim := MeshInstance3D.new()
+	var torus := TorusMesh.new()
+	torus.inner_radius = 4.86
+	torus.outer_radius = 5.06
+	torus.rings = 32
+	torus.ring_segments = 8
+	rim.mesh = torus
+	var rim_mat := StandardMaterial3D.new()
+	rim_mat.albedo_color = Color(1.0, 0.26, 0.14)
+	rim_mat.emission_enabled = true
+	rim_mat.emission = Color(1.0, 0.22, 0.12)
+	rim_mat.emission_energy_multiplier = 2.6
+	rim.material_override = rim_mat
+	rim.position = Vector3(0, 0.04, 0)
+	boss_slam_ring.add_child(rim)
+	add_child(boss_slam_ring)
+
+
+func _execute_boss_slam() -> void:
+	_clear_boss_ring()
+	AudioManager.play("boss_slam")
+	attack_anim_timer = 0.65
+	var dmg: int = randi_range(22, 30)
+	var player: Node3D = GameState.player_node
+	if is_instance_valid(player) and not GameState.is_dead:
+		var dist_p: float = global_position.distance_to(player.global_position)
+		if dist_p <= 5.15:
+			GameState.damage_player(dmg, "%s (Сокрушительный топот)" % mob_title)
+			if player is CharacterBody3D:
+				var away: Vector3 = (player.global_position - global_position)
+				away.y = 0.0
+				away = away.normalized() if away.length() > 0.1 else Vector3.BACK
+				(player as CharacterBody3D).velocity += away * 8.0 + Vector3(0, 4.5, 0)
+		else:
+			GameState.floating_text_requested.emit(player.global_position + Vector3(0, 2.2, 0), "УКЛОНЕНИЕ!", Color(0.55, 0.95, 1.0), false)
+	var pet: Node3D = GameState.pet_node
+	if is_instance_valid(pet) and not GameState.pet_dead and global_position.distance_to(pet.global_position) <= 5.15:
+		(pet as PetCompanion).take_damage(int(round(dmg * 0.65)), "%s (Топот)" % mob_title)
+
+
+func _spawn_boss_add() -> void:
+	if boss_adds_spawned:
+		return
+	boss_adds_spawned = true
+	GameState.add_combat_log("%s вопит: «На помощь, рудокопы! Гнать чужака!»" % mob_title, Color(1.0, 0.35, 0.25))
+	for ox in [-3.2, 3.2]:
+		var minion := MobEntity.new()
+		minion.name = "BossKoboldAdd_%d" % randi()
+		minion.configure({
+			"mob_id": "kobold",
+			"mob_title": "Кобольд-прихвостень",
+			"level": 2,
+			"is_elite": false,
+			"max_hp": 62,
+			"damage_min": 5,
+			"damage_max": 9,
+			"aggro_radius": 18.0,
+			"attack_range": 2.6,
+			"attack_interval": 2.1,
+			"move_speed": 4.4,
+			"xp_reward": 20,
+		})
+		minion.position = global_position + Vector3(ox, 0.0, 2.2)
+		get_parent().add_child(minion)
+		spawned_adds.append(minion)
+
+
 func _process_attack(delta: float, player: Node3D, player_alive: bool) -> void:
 	if not player_alive:
+		cast_display_name = ""
+		cast_progress = 0.0
+		boss_slam_cast = 0.0
+		_clear_boss_ring()
 		state = State.EVADE_RETURN
 		return
 	if global_position.distance_to(spawn_position) > LEASH_DISTANCE:
@@ -353,8 +517,37 @@ func _process_attack(delta: float, player: Node3D, player_alive: bool) -> void:
 	var to_player: Vector3 = player.global_position - global_position
 	to_player.y = 0.0
 	var dist: float = to_player.length()
+
+	if mob_id == "boss_crusher":
+		if boss_slam_cast > 0.0:
+			velocity.x = 0.0
+			velocity.z = 0.0
+			boss_slam_cast -= delta
+			cast_display_name = "Сокрушительный топот"
+			cast_progress = clampf(1.0 - (boss_slam_cast / 1.8), 0.0, 1.0)
+			if stun_indicator:
+				stun_indicator.visible = true
+				stun_indicator.modulate = Color(1.0, 0.25, 0.18)
+				stun_indicator.text = "Топот! (%.1f)" % maxf(0.0, boss_slam_cast)
+			if boss_slam_cast <= 0.0:
+				cast_display_name = ""
+				cast_progress = 0.0
+				if stun_indicator:
+					stun_indicator.visible = false
+				_execute_boss_slam()
+			return
+		boss_slam_cd -= delta
+		if boss_slam_cd <= 0.0 and dist <= 6.2:
+			boss_slam_cd = 7.5 if boss_enraged else 9.5
+			boss_slam_cast = 1.8
+			_spawn_boss_slam_ring()
+			GameState.add_combat_log("%s поднимает топор: отбегите от красного круга!" % mob_title, Color(1.0, 0.42, 0.22))
+			return
+
 	if dist > attack_range * 1.15:
 		enemy_cast_timer = 0.0
+		cast_display_name = ""
+		cast_progress = 0.0
 		if stun_indicator and state != State.STUNNED:
 			stun_indicator.visible = false
 		state = State.CHASE
@@ -368,11 +561,15 @@ func _process_attack(delta: float, player: Node3D, player_alive: bool) -> void:
 	if is_caster:
 		if enemy_cast_timer > 0.0:
 			enemy_cast_timer -= delta
+			cast_display_name = "Огненная стрела"
+			cast_progress = clampf(1.0 - (enemy_cast_timer / 1.4), 0.0, 1.0)
 			if stun_indicator:
 				stun_indicator.visible = true
 				stun_indicator.modulate = Color(1.0, 0.52, 0.18)
 				stun_indicator.text = "Читает: Огн. стрела (%.1f)" % maxf(0.0, enemy_cast_timer)
 			if enemy_cast_timer <= 0.0:
+				cast_display_name = ""
+				cast_progress = 0.0
 				if stun_indicator:
 					stun_indicator.visible = false
 				attack_cooldown = attack_interval
@@ -381,10 +578,12 @@ func _process_attack(delta: float, player: Node3D, player_alive: bool) -> void:
 		elif attack_cooldown <= 0.0:
 			enemy_cast_timer = 1.4
 	elif attack_cooldown <= 0.0:
-		attack_cooldown = attack_interval
+		attack_cooldown = attack_interval * (0.68 if boss_enraged else 1.0)
 		attack_anim_timer = 0.55
 		var dmg: int = randi_range(damage_min, damage_max)
-		GameState.damage_player(dmg, mob_title)
+		if boss_enraged:
+			dmg = int(round(float(dmg) * 1.25))
+		_deal_melee_or_spell_damage(player, dmg, mob_title)
 
 
 func _fire_enemy_bolt(target: Node3D) -> void:
@@ -410,8 +609,8 @@ func _fire_enemy_bolt(target: Node3D) -> void:
 	var tw := proj.create_tween()
 	tw.tween_property(proj, "global_position", end, travel)
 	tw.tween_callback(func() -> void:
-		if not GameState.is_dead:
-			GameState.damage_player(dmg, "%s (Огненная стрела)" % mob_title)
+		if is_instance_valid(target):
+			_deal_melee_or_spell_damage(target, dmg, "%s (Огненная стрела)" % mob_title)
 		proj.queue_free()
 	)
 
@@ -466,7 +665,7 @@ func _face_direction(dir: Vector3, delta: float) -> void:
 	rotation.y = lerp_angle(rotation.y, target_yaw, minf(1.0, delta * 10.0))
 
 
-func take_damage(amount: int, _attacker: Node3D, ability_name: String = "Атака", is_crit: bool = false) -> void:
+func take_damage(amount: int, attacker: Node3D, ability_name: String = "Атака", is_crit: bool = false) -> void:
 	if state == State.DEAD:
 		return
 	if state == State.EVADE_RETURN:
@@ -474,18 +673,31 @@ func take_damage(amount: int, _attacker: Node3D, ability_name: String = "Ата�
 		return
 
 	hp = maxi(0, hp - amount)
+	hit_flash_timer = 0.11
+	if attacker is PetCompanion and not is_instance_valid(aggro_target):
+		aggro_target = attacker
+
 	AudioManager.play("crit" if is_crit else "hit")
-	var text_col: Color = Color(1.0, 0.88, 0.22) if (is_crit or ability_name != "Автоатака") else Color.WHITE
+	var text_col: Color = Color(0.45, 0.96, 0.35) if ability_name == dot_name and dot_timer > 0.0 else (Color(1.0, 0.88, 0.22) if (is_crit or ability_name != "Автоатака") else Color.WHITE)
 	var text_str: String = "%d!" % amount if is_crit else "%d" % amount
 	var label_y: float = 2.4 if mob_id == "boss_crusher" else 1.8
 	GameState.floating_text_requested.emit(global_position + Vector3(randf_range(-0.25, 0.25), label_y, 0), text_str, text_col, is_crit)
 
 	var crit_suffix: String = " (Крит!)" if is_crit else ""
-	GameState.add_combat_log("Ваше умение «%s» наносит цели %s %d ед. урона%s." % [ability_name, mob_title, amount, crit_suffix], GameState.COLOR_LOG_COMBAT_PLAYER if ability_name == "Автоатака" else GameState.COLOR_LOG_SPELL)
+	var prefix_who: String = "Ваш спутник (%s)" % ability_name if attacker is PetCompanion else "Ваше умение «%s»" % ability_name
+	GameState.add_combat_log("%s наносит цели %s %d ед. урона%s." % [prefix_who, mob_title, amount, crit_suffix], GameState.COLOR_LOG_COMBAT_PLAYER if ability_name == "Автоатака" else GameState.COLOR_LOG_SPELL)
 
 	if hp <= 0:
 		_die()
 	else:
+		if mob_id == "boss_crusher":
+			var ratio: float = float(hp) / float(max_hp)
+			if ratio <= 0.60 and not boss_adds_spawned:
+				_spawn_boss_add()
+			if ratio <= 0.35 and not boss_enraged:
+				boss_enraged = true
+				GameState.add_combat_log("%s впадает в ЯРОСТЬ! Урон и скорость увеличены!" % mob_title, Color(1.0, 0.25, 0.20))
+				GameState.floating_text_requested.emit(global_position + Vector3(0, 2.8, 0), "ЯРОСТЬ!", Color(1.0, 0.25, 0.20), true)
 		if state == State.IDLE:
 			_enter_aggro()
 		_update_nameplate()
@@ -496,6 +708,10 @@ func apply_stun(duration: float) -> void:
 		return
 	state = State.STUNNED
 	enemy_cast_timer = 0.0
+	boss_slam_cast = 0.0
+	cast_display_name = ""
+	cast_progress = 0.0
+	_clear_boss_ring()
 	stun_timer = maxf(stun_timer, duration)
 	if stun_indicator:
 		stun_indicator.visible = true
@@ -507,6 +723,11 @@ func apply_stun(duration: float) -> void:
 func _die() -> void:
 	state = State.DEAD
 	velocity = Vector3.ZERO
+	dot_timer = 0.0
+	cast_display_name = ""
+	cast_progress = 0.0
+	boss_slam_cast = 0.0
+	_clear_boss_ring()
 	respawn_timer = RESPAWN_DELAY
 	if stun_indicator:
 		stun_indicator.visible = false
@@ -528,6 +749,16 @@ func _respawn() -> void:
 	hp = max_hp
 	state = State.IDLE
 	has_shouted_aggro = false
+	dot_timer = 0.0
+	dot_tick_accum = 0.0
+	aggro_target = null
+	cast_display_name = ""
+	cast_progress = 0.0
+	boss_adds_spawned = false
+	boss_enraged = false
+	boss_slam_cast = 0.0
+	boss_slam_cd = 6.0
+	_clear_boss_ring()
 	loot_copper = 0
 	loot_items.clear()
 	refresh_loot_indicator()
@@ -694,7 +925,7 @@ func _update_animation(delta: float) -> void:
 		anim_state = "DEAD"
 	elif state == State.STUNNED:
 		anim_state = "STUNNED"
-	elif is_caster and enemy_cast_timer > 0.0:
+	elif (is_caster and enemy_cast_timer > 0.0) or (mob_id == "boss_crusher" and boss_slam_cast > 0.0):
 		anim_state = "CAST"
 	elif Vector2(velocity.x, velocity.z).length() > 0.25:
 		anim_state = "WALK"

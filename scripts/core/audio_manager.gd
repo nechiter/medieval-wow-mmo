@@ -55,6 +55,11 @@ func _build_sounds() -> void:
 	_streams["ui_click"] = _make_chord_or_sweep(0.05, 620.0, 480.0, false, 0.30)
 	_streams["error"] = _make_chord_or_sweep(0.14, 190.0, 135.0, true, 0.45)
 	_streams["death"] = _make_arpeggio([329.63, 293.66, 246.94, 196.0], 0.16, 0.55)
+	_streams["bow_shot"] = _make_chord_or_sweep(0.14, 920.0, 280.0, true, 0.42)
+	_streams["gather"] = _make_noise_impact(0.14, 480.0, 180.0, 0.45)
+	_streams["hearthstone"] = _make_arpeggio([392.0, 523.25, 659.25, 783.99, 1046.5], 0.14, 0.52)
+	_streams["boss_slam"] = _make_noise_impact(0.32, 130.0, 42.0, 0.85)
+	_streams["step"] = _make_noise_impact(0.05, 110.0, 60.0, 0.22)
 
 
 func _samples_to_wav(samples: PackedFloat32Array) -> AudioStreamWAV:
